@@ -263,7 +263,20 @@ function placeAncestor(placed, edges, id, excludeSpouseId, xLeft, width, gen){
   const folks = [{person:p, half:false, isPivot:true}, ...sibs.map(s=>({person:s.p, half:s.half, isPivot:false}))]
     .sort((a,b)=>byBorn(a.person,b.person));
   const rowWidth = folks.reduce((sum,f)=> sum + 1 + partnersOf(f.person).filter(s=>!(f.isPivot && s.id===excludeSpouseId)).length, 0);
-  let cursor = xLeft + (width-rowWidth)/2;
+  // Centering this row purely within the space handed down from the child
+  // below breaks once the pivot has many siblings: the pivot's own spot
+  // inside that wide sibling row depends on sort order, not the row's
+  // midpoint, so a single-child descendant centered on the row's midpoint
+  // could land far from where the pivot actually ended up. Center on the
+  // parents' own actual position instead (clamped to the space we were
+  // given, so sibling forks still never overlap each other).
+  let cursor;
+  if(parentPos.length){
+    const parentCenter = parentPos.reduce((s,pp)=>s+pp.x,0)/parentPos.length;
+    cursor = Math.max(xLeft, Math.min(xLeft+width-rowWidth, parentCenter-rowWidth/2));
+  } else {
+    cursor = xLeft + (width-rowWidth)/2;
+  }
 
   let pivotPos = null;
   folks.forEach(f=>{

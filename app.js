@@ -76,6 +76,13 @@ let sheetMode = null;
 // setFocus); currentAnchor mirrors it during a render pass so splitParents
 // doesn't need activeAnchor threaded through every call.
 let activeAnchor = null, currentAnchor = null;
+// Anchors still cap the default view, but aren't a true dead end - each
+// one you tap "reveals" shows its own recorded parents, which themselves
+// become the new (temporary) ceiling for this render, one generation at
+// a time, rather than exploding back into the unlimited-width binary fan
+// the whole anchor feature exists to avoid. Reset whenever the active
+// anchor itself changes, so returning here later starts collapsed again.
+let revealedPast = new Set();
 let editCoParents = [];
 const app = $("#app");
 const P = id => people.get(id);
@@ -269,9 +276,23 @@ function pickFocus(){
 function setFocus(id){
   if(!P(id)) return;
   const reachable = reachableAnchors(id);
-  activeAnchor = (activeAnchor && reachable.has(activeAnchor)) ? activeAnchor : (reachable.size ? firstReachableAnchor(id) : null);
+  const nextAnchor = (activeAnchor && reachable.has(activeAnchor)) ? activeAnchor : (reachable.size ? firstReachableAnchor(id) : null);
+  if(nextAnchor !== activeAnchor) revealedPast = new Set();
+  activeAnchor = nextAnchor;
   focusId = id;
   if(tree) keySet("ft-anchor-" + tree.key, activeAnchor || "");
+}
+// Whether p's own ancestors are hidden right now - true for an anchor
+// nobody's tapped open yet, and true for whichever node was just revealed
+// as an anchor's parent (so going up stays one generation at a time).
+function isBlocked(p){
+  if(revealedPast.has(p.id)) return false;
+  if(isAnchor(p)) return true;
+  for(const rid of revealedPast){
+    const rp = P(rid);
+    if(rp && (rp.parents||[]).includes(p.id)) return true;
+  }
+  return false;
 }
 function go(id, push=true){
   if(!P(id)) return;
@@ -356,9 +377,10 @@ function ancWidth(id, excludeSpouseId, extraPartnerId){
   const sibs = siblingsOf(p).map(s=>s.p);
   const folks = [p, ...sibs];
   const rowWidth = folks.reduce((sum,f)=> sum + 1 + partnersOf(f).filter(s=>!(f.id===p.id && s.id===excludeSpouseId)).length + ((f.id===p.id && extraPartnerId)?1:0), 0);
-  // an anchor is a hard stop - never recurse past one into its own
-  // parents, even if it happens to have some recorded.
-  const {expand, suppressed} = isAnchor(p) ? {expand:[], suppressed:null} : splitParents(parentsOf(p));
+  // an anchor is a hard stop by default - never recurse past one into its
+  // own parents, even if it happens to have some recorded - unless it's
+  // been explicitly revealed (see isBlocked/revealedPast).
+  const {expand, suppressed} = isBlocked(p) ? {expand:[], suppressed:null} : splitParents(parentsOf(p));
   // a suppressed co-parent who IS already a registered spouse gets placed
   // by the expanding parent's own row, like any other partner - only a
   // suppressed co-parent with no spouse record of their own needs this
@@ -383,7 +405,7 @@ function descWidth(id){
 function placeAncestor(placed, edges, id, excludeSpouseId, xLeft, width, gen, extraPartnerId){
   const p = P(id);
   const parents = parentsOf(p);
-  const {expand, suppressed} = isAnchor(p) ? {expand:[], suppressed:null} : splitParents(parents);
+  const {expand, suppressed} = isBlocked(p) ? {expand:[], suppressed:null} : splitParents(parents);
   const parentPos = [];
   if(expand.length){
     // same reserved-extra-unit rule as ancWidth: only a suppressed
@@ -556,7 +578,7 @@ function renderEdges(edges, px, py){
 function bubbleHtml(n, x, y){
   const p = P(n.id); if(!p) return "";
   if(p.placeholder) return `<button class="node ph" style="left:${x}px;top:${y}px" data-go="${esc(n.id)}">Unknown</button>`;
-  const more = n.deadEnd && (parentsOf(p).length || childrenOf(p.id).length);
+  const more = (n.deadEnd && (parentsOf(p).length || childrenOf(p.id).length)) || (isBlocked(p) && parentsOf(p).length>0);
   const genderCls = p.gender==="m" ? " g-m" : p.gender==="f" ? " g-f" : "";
   return `<button class="node${n.dim?" dim":""}${n.id===focusId?" me":""}${more?" more":""}${genderCls}" style="left:${x}px;top:${y}px" data-go="${esc(n.id)}">
     <span class="nm">${esc(displayName(p)||"Unnamed")}${isAnchor(p)?` <span class="anchorBadge" title="Anchor point">⚓</span>`:""}</span>
@@ -944,6 +966,15 @@ document.addEventListener("click", e => {
   if(g){
     const id = g.dataset.go, p = P(id);
     if(p && p.placeholder) return openSheet({edit:id});
+    // an anchor (or someone just revealed as one's parent) with its own
+    // parents on record isn't a dead end - tapping it reveals them, one
+    // generation at a time, instead of collapsing the view onto them.
+    // This never touches focus/the active anchor - purely adds content
+    // above, so it can never undo itself by triggering a real navigation.
+    if(p && isBlocked(p) && parentsOf(p).length){
+      revealedPast.add(id);
+      return render();
+    }
     if(id === focusId) return openSheet({edit:id});
     // someone with no recorded parents AND no recorded children (e.g. a
     // spouse who was never actually added as a parent on their kids, just

@@ -554,7 +554,7 @@ function bubbleHtml(n, x, y){
   const genderCls = p.gender==="m" ? " g-m" : p.gender==="f" ? " g-f" : "";
   return `<button class="node${n.dim?" dim":""}${n.id===focusId?" me":""}${more?" more":""}${genderCls}" style="left:${x}px;top:${y}px" data-go="${esc(n.id)}">
     <span class="nm">${esc(displayName(p)||"Unnamed")}${isAnchor(p)?` <span class="anchorBadge" title="Anchor point">⚓</span>`:""}</span>
-    ${p.maidenName?`<span class="maiden">née ${esc(p.maidenName)}</span>`:""}
+    ${p.maidenName?`<span class="maiden">(${esc(p.maidenName)})</span>`:""}
     <span class="yrs${birthKnown(p)?"":" unk"}">${esc(birthLabel(p))}</span>
     ${n.half?`<span class="chip">half</span>`:""}
   </button>`;
@@ -564,7 +564,7 @@ function dockHtml(f, otherAnchors){
   const hint = otherAnchors && otherAnchors.length
     ? `<p class="anchorHint">Also connected through ${otherAnchors.map(id=>esc(displayName(P(id))||"another line")).join(", ")} — tap a parent above to switch sides.</p>` : "";
   return `<div class="dock">
-    <div class="dockInfo"><strong>${esc(displayName(f)||"Unnamed")}</strong>${isAnchor(f)?` <span class="anchorBadge" title="Anchor point">⚓</span>`:""}${f.maidenName?` <span class="maiden">née ${esc(f.maidenName)}</span>`:""}${years(f)?` <span class="yrs">${esc(years(f))}</span>`:""}${f.place?`<div class="place">${esc(f.place)}</div>`:""}${hint}</div>
+    <div class="dockInfo"><strong>${esc(displayName(f)||"Unnamed")}</strong>${isAnchor(f)?` <span class="anchorBadge" title="Anchor point">⚓</span>`:""}${years(f)?` <span class="yrs">${esc(years(f))}</span>`:""}${f.maidenName?`<div class="maiden">(${esc(f.maidenName)})</div>`:""}${f.place?`<div class="place">${esc(f.place)}</div>`:""}${hint}</div>
     <div class="dockBtns">
       ${(f.parents||[]).length<2?`<button class="dbtn" data-add="parent">+ Parent</button>`:""}
       <button class="dbtn" data-add="partner">+ Partner</button>
@@ -649,7 +649,7 @@ function renderAll(){
 function card(p){
   const kids = childrenOf(p.id).length, y = years(p);
   const genderCls = p.gender==="m" ? " g-m" : p.gender==="f" ? " g-f" : "";
-  return `<button class="card${genderCls}" data-go="${esc(p.id)}"><span class="nm">${esc(displayName(p)||"Unnamed")}${isAnchor(p)?` <span class="anchorBadge" title="Anchor point">⚓</span>`:""}</span>${p.maidenName?`<span class="maiden">née ${esc(p.maidenName)}</span>`:""}${y?`<span class="yrs">${esc(y)}</span>`:""}${kids?`<span class="meta"><span class="chip">${kids} ${kids===1?"child":"children"}</span></span>`:""}</button>`;
+  return `<button class="card${genderCls}" data-go="${esc(p.id)}"><span class="nm">${esc(displayName(p)||"Unnamed")}${isAnchor(p)?` <span class="anchorBadge" title="Anchor point">⚓</span>`:""}</span>${p.maidenName?`<span class="maiden">(${esc(p.maidenName)})</span>`:""}${y?`<span class="yrs">${esc(y)}</span>`:""}${kids?`<span class="meta"><span class="chip">${kids} ${kids===1?"child":"children"}</span></span>`:""}</button>`;
 }
 
 // Which (focusId, activeAnchor) pair we last auto-scrolled to - re-scroll

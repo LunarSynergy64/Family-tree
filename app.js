@@ -141,9 +141,10 @@ function years(p){
 const surname = p => { const w=(p.name||"").trim().split(/\s+/); return w.length>1 ? w[w.length-1] : (w[0]||"Unnamed"); };
 
 /* ================= saving ================= */
+const toYear = v => { const n = parseInt(v,10); return Number.isFinite(n) ? n : null; };
 async function put(p){
   const data = {
-    name: p.name||"", born: p.born||"", died: p.died||"", place: p.place||"", note: p.note||"",
+    name: p.name||"", born: toYear(p.born), died: toYear(p.died), place: p.place||"", note: p.note||"",
     parents: (p.parents||[]).slice(0,2), spouses: (p.spouses||[]).slice(0,20), updated: Date.now()
   };
   if(p.placeholder && !data.name) data.placeholder = true;
@@ -195,46 +196,142 @@ function go(id, push=true){
   focusId=id; view="tree"; render(); window.scrollTo({top:0});
 }
 
-function personBubble(p, opts={}){
-  if(p.placeholder) return `<button class="node ph" data-go="${esc(p.id)}">Unknown</button>`;
-  const isFocal = p.id===focusId;
-  const more = opts.dim && (parentsOf(p).length || childrenOf(p.id).length);
-  return `<button class="node${opts.dim?" dim":""}${isFocal?" me":""}${more?" more":""}" data-go="${esc(p.id)}">
-    <span class="nm">${esc(p.name||"Unnamed")}</span>
-    ${years(p)?`<span class="yrs">${esc(years(p))}</span>`:""}
-    ${opts.half?`<span class="chip">half</span>`:""}
-  </button>`;
-}
-function unit(p, opts={}){
-  const spouses = partnersOf(p).filter(s=>s.id!==opts.excludeSpouseId);
-  let h = personBubble(p, {half:opts.half});
-  spouses.forEach(s => { h += `<span class="tie"></span>` + personBubble(s, {dim:true}); });
-  return `<div class="couple">${h}</div>`;
-}
-function ancestorFan(id, excludeSpouseId, depth=0){
-  const p = P(id); if(!p || depth>12) return "";
-  const sibs = siblingsOf(p);
-  const rowFolks = [{p, half:false}, ...sibs].sort((a,b)=>byBorn(a.p,b.p));
-  const rowHtml = rowFolks.map(({p:person, half}) =>
-    unit(person, {excludeSpouseId: person.id===p.id ? excludeSpouseId : null, half})
-  ).join("");
+/* The grid's vertical axis is literal birth year (YEAR_PX per year). A person
+   with no recorded year is estimated from whichever known relative anchors
+   them: a generation gap below a known parent, a generation gap above a
+   known child, or (for a sibling/spouse, who have no generation offset)
+   exactly their nearest relative's point - never shown as if it were real
+   data, just used to place the dot sensibly. The horizontal axis is a
+   classic leaf-counting tree layout so branches don't overlap. */
+const YEAR_PX = 12;
+const GEN_GAP = 25;
+const SLOT_W = 124;
+const DEFAULT_YEAR = new Date().getFullYear() - 40;
+const parseYear = p => {
+  if(!p || p.born==null || p.born==="") return null;
+  const n = Number(p.born);
+  return Number.isFinite(n) ? n : null;
+};
+
+function ancWidth(id, excludeSpouseId){
+  const p = P(id);
+  const sibs = siblingsOf(p).map(s=>s.p);
+  const folks = [p, ...sibs];
+  const rowWidth = folks.reduce((sum,f)=> sum + 1 + partnersOf(f).filter(s=>!(f.id===p.id && s.id===excludeSpouseId)).length, 0);
   const parents = parentsOf(p);
-  let upHtml = "";
-  if(parents.length){
-    const cols = parents.map((par,i) => ancestorFan(par.id, parents.length>1 ? parents[1-i].id : null, depth+1)).join("");
-    upHtml = `<div class="anc-up">${cols}</div><div class="stem"></div>`;
-  }
-  return `<div class="anc-col">${upHtml}<div class="anc-row">${rowHtml}</div></div>`;
+  const upWidth = parents.length ? parents.reduce((sum,par,i)=>sum+ancWidth(par.id, parents.length>1?parents[1-i].id:null),0) : 0;
+  return Math.max(rowWidth, upWidth, 1);
 }
-function descendantTree(id, depth=0){
-  const p = P(id); if(!p || depth>20) return "";
-  const kids = childrenOf(id).sort(byBorn);
-  let downHtml = "";
-  if(kids.length){
-    const cols = kids.map(k => descendantTree(k.id, depth+1)).join("");
-    downHtml = `<div class="stem"></div><div class="desc-down">${cols}</div>`;
+function descWidth(id){
+  const p = P(id);
+  const rowWidth = 1 + partnersOf(p).length;
+  const kids = childrenOf(id);
+  const downWidth = kids.length ? kids.reduce((sum,k)=>sum+descWidth(k.id),0) : 0;
+  return Math.max(rowWidth, downWidth, 1);
+}
+
+function placeAncestor(placed, lines, id, excludeSpouseId, xLeft, width, childYear){
+  const p = P(id);
+  const pivotKnown = parseYear(p);
+  const knownSpouse = partnersOf(p).filter(s=>s.id!==excludeSpouseId).map(parseYear).find(y=>y!=null);
+  // a preliminary guess, used only to give an unknown parent something sane
+  // to anchor above - real parent data (below) can still override it.
+  const prelim = pivotKnown!=null ? pivotKnown
+    : knownSpouse!=null ? knownSpouse
+    : childYear!=null ? childYear-GEN_GAP
+    : DEFAULT_YEAR;
+
+  const parents = parentsOf(p);
+  const parentPos = [];
+  if(parents.length){
+    const widths = parents.map((par,i)=>ancWidth(par.id, parents.length>1?parents[1-i].id:null));
+    const totalW = widths.reduce((a,b)=>a+b,0);
+    let px = xLeft + (width-totalW)/2;
+    parents.forEach((par,i)=>{
+      parentPos.push(placeAncestor(placed, lines, par.id, parents.length>1?parents[1-i].id:null, px, widths[i], prelim));
+      px += widths[i];
+    });
   }
-  return `<div class="desc-col"><div class="desc-row">${unit(p)}</div>${downHtml}</div>`;
+  const parentPosKnown = parentPos.filter(pp=>pp.known);
+  const parentAvgYear = parentPosKnown.length ? parentPosKnown.reduce((s,pp)=>s+pp.year,0)/parentPosKnown.length : null;
+
+  const sibs = siblingsOf(p);
+  const folks = [{person:p, half:false, isPivot:true}, ...sibs.map(s=>({person:s.p, half:s.half, isPivot:false}))]
+    .sort((a,b)=>byBorn(a.person,b.person));
+  const rowWidth = folks.reduce((sum,f)=> sum + 1 + partnersOf(f.person).filter(s=>!(f.isPivot && s.id===excludeSpouseId)).length, 0);
+  let cursor = xLeft + (width-rowWidth)/2;
+
+  const pivotYear = pivotKnown!=null ? pivotKnown
+    : parentAvgYear!=null ? parentAvgYear+GEN_GAP
+    : prelim;
+
+  let pivotPos = null;
+  folks.forEach(f=>{
+    const person = f.person;
+    const py = parseYear(person);
+    const effYear = f.isPivot ? pivotYear : (py!=null ? py : pivotYear);
+    const x = cursor + 0.5; cursor += 1;
+    placed.push({id:person.id, x, year:effYear, known:py!=null, half:f.half, placeholder:!!person.placeholder, deadEnd:!f.isPivot});
+    if(f.isPivot) pivotPos = {x, year:effYear, known:pivotKnown!=null};
+
+    const myParents = person.parents||[];
+    parentPos.forEach((pp,i)=>{ if(myParents.includes(parents[i].id)) lines.push({ax:pp.x, ay:pp.year, bx:x, by:effYear}); });
+
+    partnersOf(person).filter(s=>!(f.isPivot && s.id===excludeSpouseId)).forEach(sp=>{
+      const spy = parseYear(sp);
+      const sEff = spy!=null ? spy : effYear;
+      const sx = cursor+0.5; cursor++;
+      placed.push({id:sp.id, x:sx, year:sEff, known:spy!=null, dim:true, placeholder:!!sp.placeholder, deadEnd:true});
+      lines.push({ax:x, ay:effYear, bx:sx, by:sEff, tie:true});
+    });
+  });
+  return pivotPos;
+}
+function placeDescendant(placed, lines, id, xLeft, width, parentYear, parentKnown){
+  const p = P(id);
+  const py = parseYear(p);
+  const knownSpouse = partnersOf(p).map(parseYear).find(y=>y!=null);
+  const effYear = py!=null ? py
+    : parentKnown ? parentYear+GEN_GAP
+    : knownSpouse!=null ? knownSpouse
+    : parentYear!=null ? parentYear+GEN_GAP
+    : DEFAULT_YEAR;
+  const x = xLeft + width/2;
+  placed.push({id:p.id, x, year:effYear, known:py!=null, placeholder:!!p.placeholder});
+
+  let cursor = x+0.5;
+  partnersOf(p).forEach(sp=>{
+    const spy = parseYear(sp);
+    const sEff = spy!=null ? spy : effYear;
+    const sx = cursor; cursor++;
+    placed.push({id:sp.id, x:sx, year:sEff, known:spy!=null, dim:true, placeholder:!!sp.placeholder, deadEnd:true});
+    lines.push({ax:x, ay:effYear, bx:sx, by:sEff, tie:true});
+  });
+
+  const kids = childrenOf(id).sort(byBorn);
+  if(kids.length){
+    const widths = kids.map(k=>descWidth(k.id));
+    const totalW = widths.reduce((a,b)=>a+b,0);
+    let cx = x - totalW/2;
+    kids.forEach((k,i)=>{
+      const kpos = placeDescendant(placed, lines, k.id, cx, widths[i], effYear, py!=null);
+      lines.push({ax:x, ay:effYear, bx:kpos.x, by:kpos.year});
+      cx += widths[i];
+    });
+  }
+  return {x, year:effYear, known:py!=null};
+}
+
+function bubbleHtml(n, x, y){
+  const p = P(n.id); if(!p) return "";
+  if(p.placeholder) return `<button class="node ph" style="left:${x}px;top:${y}px" data-go="${esc(n.id)}">Unknown</button>`;
+  const more = n.deadEnd && (parentsOf(p).length || childrenOf(p.id).length);
+  const label = n.known ? esc(String(p.born)) + (p.died!=null && p.died!=="" ? ` – ${esc(String(p.died))}` : "") : "Unknown date of Birth";
+  return `<button class="node${n.dim?" dim":""}${n.id===focusId?" me":""}${more?" more":""}" style="left:${x}px;top:${y}px" data-go="${esc(n.id)}">
+    <span class="nm">${esc(p.name||"Unnamed")}</span>
+    <span class="yrs${n.known?"":" unk"}">${label}</span>
+    ${n.half?`<span class="chip">half</span>`:""}
+  </button>`;
 }
 function dockHtml(f){
   if(!f || f.placeholder) return "";
@@ -256,10 +353,37 @@ function renderPedigree(){
   pickFocus();
   const f = P(focusId);
   if(!f) return `<p class="hint">Nobody to show.</p>`;
+
+  const placed = [], lines = [];
+  const focalPos = placeAncestor(placed, lines, f.id, null, 0, ancWidth(f.id, null), null);
+
   const kids = childrenOf(f.id).sort(byBorn);
-  const descHtml = kids.length ? `<div class="stem"></div><div class="desc-down">${kids.map(k=>descendantTree(k.id)).join("")}</div>` : "";
-  const fanHtml = ancestorFan(f.id, null);
-  return `<div class="pedigree">${fanHtml}${descHtml}</div>${dockHtml(f)}`;
+  if(kids.length){
+    const widths = kids.map(k=>descWidth(k.id));
+    const totalW = widths.reduce((a,b)=>a+b,0);
+    let cx = focalPos.x - totalW/2;
+    kids.forEach((k,i)=>{
+      const kpos = placeDescendant(placed, lines, k.id, cx, widths[i], focalPos.year, focalPos.known);
+      lines.push({ax:focalPos.x, ay:focalPos.year, bx:kpos.x, by:kpos.year});
+      cx += widths[i];
+    });
+  }
+
+  const xs = placed.map(n=>n.x), ys = placed.map(n=>n.year);
+  const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
+  const PAD_X = 70, PAD_Y = 50;
+  const px = x => (x-minX)*SLOT_W + PAD_X;
+  const py = y => (y-minY)*YEAR_PX + PAD_Y;
+  const width = (maxX-minX)*SLOT_W + PAD_X*2;
+  const height = (maxY-minY)*YEAR_PX + PAD_Y*2 + 170;
+
+  const linesHtml = lines.map(l => `<line x1="${px(l.ax).toFixed(1)}" y1="${py(l.ay).toFixed(1)}" x2="${px(l.bx).toFixed(1)}" y2="${py(l.by).toFixed(1)}" class="${l.tie?"tie-line":"fam-line"}"/>`).join("");
+  const nodesHtml = placed.map(n => bubbleHtml(n, px(n.x), py(n.year))).join("");
+
+  return `<div class="pedigree" style="width:${width}px;height:${height}px">
+    <svg class="lines" width="${width}" height="${height}">${linesHtml}</svg>
+    ${nodesHtml}
+  </div>${dockHtml(f)}`;
 }
 
 function renderAll(){

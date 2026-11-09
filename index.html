@@ -68,8 +68,8 @@
     <label id="pickWrap">Who <select id="f-existing"></select></label>
     <label class="newonly">Full name <input id="f-name" placeholder="e.g. Rosa Martinez" maxlength="200"></label>
     <div class="two newonly">
-      <label>Born <input id="f-born" placeholder="1952 or 3 Mar 1952"></label>
-      <label>Died <input id="f-died" placeholder="Blank if living"></label>
+      <label>Born (year) <input id="f-born" type="number" inputmode="numeric" placeholder="e.g. 1952" min="1" max="2200" step="1"></label>
+      <label>Died (year) <input id="f-died" type="number" inputmode="numeric" placeholder="Blank if living" min="1" max="2200" step="1"></label>
     </div>
     <label class="newonly">Where they're from <input id="f-place" placeholder="Town, state or country"></label>
     <label id="otherWrap">Other parent <select id="f-other"></select></label>

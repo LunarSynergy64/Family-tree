@@ -1,0 +1,39 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // A tree's id is a SHA-256 hash of its name + password.
+    // Knowing the id is the same as knowing the password, so:
+    //  - you can open a tree only if you already know its id
+    //  - nobody can list trees to discover other families
+    match /trees/{treeId} {
+      allow get: if validId(treeId);
+      allow list: if false;
+      allow create: if validId(treeId)
+        && request.resource.data.keys().hasOnly(['name', 'created'])
+        && request.resource.data.name is string
+        && request.resource.data.name.size() <= 80;
+      allow update, delete: if false;
+
+      match /people/{personId} {
+        allow read: if treeExists(treeId);
+        allow delete: if treeExists(treeId);
+        allow create, update: if treeExists(treeId) && validPerson(request.resource.data);
+      }
+    }
+
+    function validId(id) {
+      return id.matches('^[0-9a-f]{64}$');
+    }
+    function treeExists(id) {
+      return validId(id) && exists(/databases/$(database)/documents/trees/$(id));
+    }
+    function validPerson(p) {
+      return p.keys().hasOnly(['name', 'born', 'died', 'place', 'note', 'parents', 'spouses', 'updated'])
+        && p.name is string && p.name.size() <= 200
+        && (!('note' in p) || (p.note is string && p.note.size() <= 5000))
+        && p.parents is list && p.parents.size() <= 2
+        && p.spouses is list && p.spouses.size() <= 20;
+    }
+  }
+}

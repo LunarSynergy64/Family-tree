@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#2f5d50">
+<title>Our Family Tree</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Alegreya:wght@500;700&family=Alegreya+Sans:wght@400;500;700&display=swap">
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%232f5d50'/%3E%3Cpath d='M16 26V14M16 18l-6-5M16 16l6-5' stroke='%23fff' stroke-width='2.5' stroke-linecap='round' fill='none'/%3E%3Ccircle cx='10' cy='12' r='3' fill='%23fff'/%3E%3Ccircle cx='22' cy='10' r='3' fill='%23fff'/%3E%3Ccircle cx='16' cy='9' r='3' fill='%23fff'/%3E%3C/svg%3E">
+</head>
+<body>
+
+<!-- ============ HOME: create or join ============ -->
+<section id="home" class="screen" hidden>
+  <div class="home-wrap">
+    <h1 class="brand">Our Family Tree</h1>
+    <p class="lede">Build your family tree together. One person starts a tree, everyone else joins with its name and password.</p>
+
+    <div id="savedWrap" hidden>
+      <h2 class="label">Your trees on this device</h2>
+      <div id="savedList" class="saved"></div>
+    </div>
+
+    <div class="choice" role="tablist">
+      <button id="tabJoin" role="tab" aria-selected="true">Join a tree</button>
+      <button id="tabCreate" role="tab" aria-selected="false">Start a new tree</button>
+    </div>
+
+    <form id="joinForm" class="box" autocomplete="off">
+      <label>Tree name <input id="j-name" placeholder="e.g. Martinez Family" required></label>
+      <label>Password <input id="j-pass" type="password" required></label>
+      <p class="err" id="joinErr" hidden></p>
+      <button class="primary" type="submit" id="joinBtn">Join tree</button>
+    </form>
+
+    <form id="createForm" class="box" autocomplete="off" hidden>
+      <label>Tree name <input id="c-name" placeholder="e.g. Martinez Family" maxlength="80" required></label>
+      <label>Password <input id="c-pass" type="password" minlength="6" required></label>
+      <label>Password again <input id="c-pass2" type="password" minlength="6" required></label>
+      <p class="hint">Share the name and password with relatives so they can join. Pick something hard to guess, since anyone with both can see and edit the tree.</p>
+      <p class="err" id="createErr" hidden></p>
+      <button class="primary" type="submit" id="createBtn">Create tree</button>
+    </form>
+  </div>
+</section>
+
+<!-- ============ TREE ============ -->
+<section id="treeScreen" class="screen" hidden>
+  <header><div class="bar">
+    <button class="round" id="backBtn" aria-label="Back" hidden>‹</button>
+    <h1 id="treeTitle">Family Tree</h1>
+    <div class="tabs" role="group" aria-label="View">
+      <button id="tabTree" aria-pressed="true">Tree</button>
+      <button id="tabAll" aria-pressed="false">Everyone</button>
+    </div>
+    <button class="round" id="menuBtn" aria-label="Tree options">⋯</button>
+  </div></header>
+  <main id="app"><p class="hint">Opening the tree…</p></main>
+</section>
+
+<!-- ============ SHEET: add / edit person ============ -->
+<div class="sheet" id="sheet" hidden>
+  <div class="scrim" data-close></div>
+  <form class="panel" id="sheetForm" autocomplete="off">
+    <h3 id="sheetTitle">Add person</h3>
+    <label id="pickWrap">Who <select id="f-existing"></select></label>
+    <label class="newonly">Full name <input id="f-name" placeholder="e.g. Rosa Martinez" maxlength="200"></label>
+    <div class="two newonly">
+      <label>Born <input id="f-born" placeholder="1952 or 3 Mar 1952"></label>
+      <label>Died <input id="f-died" placeholder="Blank if living"></label>
+    </div>
+    <label class="newonly">Where they're from <input id="f-place" placeholder="Town, state or country"></label>
+    <label id="otherWrap">Other parent <select id="f-other"></select></label>
+    <label class="check" id="linkWrap"><input type="checkbox" id="f-link" checked> <span id="linkText"></span></label>
+    <label class="newonly">Notes <textarea id="f-note" rows="3" maxlength="5000" placeholder="Nicknames, stories, maiden name…"></textarea></label>
+    <div class="actions">
+      <button type="button" class="ghost" data-close>Cancel</button>
+      <button type="submit" class="primary" id="saveBtn">Save</button>
+    </div>
+    <div id="delZone" hidden>
+      <button type="button" class="danger-link" id="delBtn">Remove this person</button>
+      <div class="confirm" id="delConfirm" hidden>
+        <span id="delText"></span>
+        <div><button type="button" class="danger" id="delYes">Remove</button><button type="button" class="ghost" id="delNo">Keep</button></div>
+      </div>
+    </div>
+  </form>
+</div>
+
+<!-- ============ SHEET: tree options ============ -->
+<div class="sheet" id="menu" hidden>
+  <div class="scrim" data-closemenu></div>
+  <div class="panel">
+    <h3>Invite family</h3>
+    <p class="hint">Send this link. It opens the tree directly, with no password needed, so only share it with family.</p>
+    <div class="copyrow"><input id="inviteLink" readonly><button class="primary" id="copyBtn" type="button">Copy</button></div>
+    <p class="hint" id="inviteName"></p>
+    <div class="menu-list">
+      <button type="button" class="ghost" id="switchBtn">Switch to another tree</button>
+      <button type="button" class="danger-link" id="forgetBtn">Remove this tree from this device</button>
+    </div>
+    <div class="actions"><button type="button" class="ghost" data-closemenu>Close</button></div>
+  </div>
+</div>
+
+<div class="toast" id="toast" hidden></div>
+<script type="module" src="app.js"></script>
+</body>
+</html>

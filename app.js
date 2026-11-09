@@ -896,6 +896,12 @@ document.addEventListener("click", e => {
     const id = g.dataset.go, p = P(id);
     if(p && p.placeholder) return openSheet({edit:id});
     if(id === focusId) return openSheet({edit:id});
+    // someone with no recorded parents AND no recorded children (e.g. a
+    // spouse who was never actually added as a parent on their kids, just
+    // linked as a partner) has nothing to navigate to - tapping them to
+    // "explore" would just collapse the view down to them alone with
+    // nobody else on screen, so open them for editing instead.
+    if(p && !parentsOf(p).length && !childrenOf(p.id).length) return openSheet({edit:id});
     return go(id);
   }
   const a = e.target.closest("[data-add]"); if(a) return openSheet({rel:a.dataset.add});

@@ -260,7 +260,7 @@ function setFocus(id){
 function go(id, push=true){
   if(!P(id)) return;
   if(push && focusId && focusId!==id) trail.push(focusId);
-  setFocus(id); view="tree"; render(); window.scrollTo({top:0});
+  setFocus(id); view="tree"; render();
 }
 
 /* Generations are flat rows (a fixed height apart, never based on birth
@@ -642,6 +642,11 @@ function card(p){
   return `<button class="card${genderCls}" data-go="${esc(p.id)}"><span class="nm">${esc(p.name||"Unnamed")}${isAnchor(p)?` <span class="anchorBadge" title="Anchor point">⚓</span>`:""}</span>${p.maidenName?`<span class="maiden">née ${esc(p.maidenName)}</span>`:""}${y?`<span class="yrs">${esc(y)}</span>`:""}${kids?`<span class="meta"><span class="chip">${kids} ${kids===1?"child":"children"}</span></span>`:""}</button>`;
 }
 
+// Which (focusId, activeAnchor) pair we last auto-scrolled to - re-scroll
+// only when either actually changes (real navigation), never on a plain
+// re-render triggered by someone else's edit syncing in elsewhere in the
+// tree, which would otherwise yank the view out from under you.
+let lastScrollKey = null;
 function render(){
   if(!tree) return;
   $("#tabTree").setAttribute("aria-pressed", view==="tree");
@@ -652,6 +657,14 @@ function render(){
   const hadFocus = document.activeElement && document.activeElement.id==="q";
   app.innerHTML = (offlineNote?`<p class="note">${esc(offlineNote)}</p>`:"") + (view==="tree" ? renderPedigree() : renderAll());
   if(hadFocus){ const q=$("#q"); q.focus(); q.setSelectionRange(q.value.length,q.value.length); }
+  if(view==="tree"){
+    const key = focusId + "|" + activeAnchor;
+    if(key !== lastScrollKey){
+      lastScrollKey = key;
+      const me = $(".node.me");
+      if(me) me.scrollIntoView({block:"center", inline:"center"});
+    }
+  }
 }
 
 /* ================= add / edit sheet ================= */

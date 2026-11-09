@@ -279,7 +279,7 @@ function placeDescendant(placed, edges, id, xLeft, width, gen){
   const x = xLeft + width/2;
   placed.push({id:p.id, x, gen, placeholder:!!p.placeholder});
 
-  let cursor = x+0.5;
+  let cursor = x+1;
   const spouseX = new Map();
   partnersOf(p).forEach(sp=>{
     const sx = cursor; cursor++;

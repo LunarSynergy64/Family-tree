@@ -222,7 +222,7 @@ async function put(p){
     died: toYear(p.died), diedMonth: toSmall(p.diedMonth,12), diedDay: toSmall(p.diedDay,31),
     place: p.place||"", note: p.note||"",
     parents: (p.parents||[]).slice(0,2), spouses: (p.spouses||[]).slice(0,20),
-    notPartnerWith: (p.notPartnerWith||[]).slice(0,20), updated: Date.now()
+    notPartnerWith: (p.notPartnerWith||[]).slice(0,20), divorced: (p.divorced||[]).slice(0,20), updated: Date.now()
   };
   if(p.placeholder && !data.name) data.placeholder = true;
   if(p.anchor) data.anchor = true;
@@ -323,6 +323,7 @@ const SLOT_W = 124, ROW_H = 148;
    other side becomes a tap-to-explore dead end, exactly like a spouse -
    tapping it switches the active anchor to their own side instead. */
 const isAnchor = p => !!p && (p.anchor===true || (tree && tree.defaultFocus===p.id));
+const isDivorced = (a, b) => !!(a && b && ((a.divorced||[]).includes(b.id) || (b.divorced||[]).includes(a.id)));
 function reachableAnchors(id, visited){
   visited = visited || new Set();
   const result = new Set();
@@ -427,7 +428,7 @@ function placeAncestor(placed, edges, id, excludeSpouseId, xLeft, width, gen, ex
     // child assumes they're a couple for this diagram by default, unless
     // explicitly marked otherwise (notPartnerWith, set from the Edit sheet).
     if(expand.length===2 && !(expand[0].notPartnerWith||[]).includes(expand[1].id)){
-      edges.push({tie:true, a:parentPos[0], b:parentPos[1]});
+      edges.push({tie:true, a:parentPos[0], b:parentPos[1], divorced:isDivorced(expand[0], expand[1])});
     }
     // a suppressed co-parent is otherwise placed by the expanding parent's
     // own row below (either normally, as a registered spouse, or via
@@ -475,12 +476,12 @@ function placeAncestor(placed, edges, id, excludeSpouseId, xLeft, width, gen, ex
     partners.forEach(sp=>{
       const sx = posOf[sp.id];
       placed.push({id:sp.id, x:sx, gen, dim:true, placeholder:!!sp.placeholder, deadEnd:true});
-      edges.push({tie:true, a:{x, gen}, b:{x:sx, gen}});
+      edges.push({tie:true, a:{x, gen}, b:{x:sx, gen}, divorced:isDivorced(person, sp)});
     });
     if(extra){
       const sx = posOf[extra.id];
       placed.push({id:extra.id, x:sx, gen, dim:true, placeholder:!!extra.placeholder, deadEnd:true});
-      edges.push({tie:true, a:{x, gen}, b:{x:sx, gen}});
+      edges.push({tie:true, a:{x, gen}, b:{x:sx, gen}, divorced:isDivorced(person, extra)});
     }
   });
   return pivotPos;
@@ -505,7 +506,7 @@ function placeDescendant(placed, edges, id, xLeft, width, gen){
   partners.forEach(sp=>{
     const sx = posOf[sp.id];
     placed.push({id:sp.id, x:sx, gen, dim:true, placeholder:!!sp.placeholder, deadEnd:true});
-    edges.push({tie:true, a:{x, gen}, b:{x:sx, gen}});
+    edges.push({tie:true, a:{x, gen}, b:{x:sx, gen}, divorced:isDivorced(p, sp)});
     spouseX.set(sp.id, sx);
   });
 
@@ -540,7 +541,13 @@ function renderEdges(edges, px, py){
   const groups = new Map();
   edges.forEach(e=>{
     if(e.tie){
-      svg += `<line x1="${px(e.a.x).toFixed(1)}" y1="${py(e.a.gen).toFixed(1)}" x2="${px(e.b.x).toFixed(1)}" y2="${py(e.b.gen).toFixed(1)}" class="tie-line"/>`;
+      const x1=px(e.a.x), y1=py(e.a.gen), x2=px(e.b.x), y2=py(e.b.gen);
+      svg += `<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" class="tie-line"/>`;
+      if(e.divorced){
+        const mx=(x1+x2)/2, my=(y1+y2)/2, s=6;
+        svg += `<line x1="${(mx-s).toFixed(1)}" y1="${(my-s).toFixed(1)}" x2="${(mx+s).toFixed(1)}" y2="${(my+s).toFixed(1)}" class="divorce-x"/>`;
+        svg += `<line x1="${(mx-s).toFixed(1)}" y1="${(my+s).toFixed(1)}" x2="${(mx+s).toFixed(1)}" y2="${(my-s).toFixed(1)}" class="divorce-x"/>`;
+      }
       return;
     }
     const key = e.parents.map(p=>p.x+","+p.gen).sort().join("|");
@@ -739,9 +746,13 @@ function openSheet(mode){
     if(coParents.length && !p.placeholder){
       editCoParents = coParents.map(cp=>cp.id);
       $("#coParentWrap").hidden = false;
-      $("#coParentList").innerHTML = coParents.map(cp =>
-        `<label class="check"><input type="checkbox" data-coparent="${esc(cp.id)}" ${(p.notPartnerWith||[]).includes(cp.id)?"":"checked"}> ${esc(displayName(cp)||"Unnamed")}</label>`
-      ).join("");
+      $("#coParentList").innerHTML = coParents.map(cp => {
+        const partnered = !(p.notPartnerWith||[]).includes(cp.id);
+        return `<div class="coParentRow">
+          <label class="check"><input type="checkbox" data-coparent="${esc(cp.id)}" ${partnered?"checked":""}> ${esc(displayName(cp)||"Unnamed")}</label>
+          <label class="check sub" data-divorcedwrap="${esc(cp.id)}" ${partnered?"":"hidden"}><input type="checkbox" data-divorced="${esc(cp.id)}" ${isDivorced(p,cp)?"checked":""}> Divorced</label>
+        </div>`;
+      }).join("");
     }
   } else {
     const fname = f ? (f.name||"this person").split(/\s+/)[0] : "";
@@ -796,6 +807,11 @@ $("#optAnchor").addEventListener("change", async e => {
 });
 
 $("#f-existing").addEventListener("change", e => $("#sheetForm").classList.toggle("picking", !!e.target.value));
+$("#coParentList").addEventListener("change", e => {
+  const cb = e.target.closest("input[data-coparent]"); if(!cb) return;
+  const wrap = $(`[data-divorcedwrap="${cb.dataset.coparent}"]`);
+  if(wrap){ wrap.hidden = !cb.checked; if(!cb.checked) wrap.querySelector("input").checked = false; }
+});
 $$("#genderToggle button").forEach(b => b.addEventListener("click", () => setGender(b.dataset.gender)));
 
 $("#sheetForm").addEventListener("submit", async e => {
@@ -819,12 +835,16 @@ $("#sheetForm").addEventListener("submit", async e => {
       const p = P(sheetMode.edit);
       const partnered = new Set([...document.querySelectorAll('#coParentList input[data-coparent]:checked')].map(el=>el.dataset.coparent));
       const notPartnerWith = editCoParents.filter(id=>!partnered.has(id));
-      await put({...p, ...fields, notPartnerWith});
+      const divorcedSet = new Set([...document.querySelectorAll('#coParentList input[data-divorced]:checked')].map(el=>el.dataset.divorced));
+      const divorced = editCoParents.filter(id=>divorcedSet.has(id));
+      await put({...p, ...fields, notPartnerWith, divorced});
       for(const cpId of editCoParents){
         const cp = P(cpId); if(!cp) continue;
         const cur = new Set(cp.notPartnerWith||[]);
         if(partnered.has(cpId)) cur.delete(p.id); else cur.add(p.id);
-        await put({...cp, notPartnerWith:[...cur]});
+        const curDivorced = new Set(cp.divorced||[]);
+        if(divorcedSet.has(cpId)) curDivorced.add(p.id); else curDivorced.delete(p.id);
+        await put({...cp, notPartnerWith:[...cur], divorced:[...curDivorced]});
       }
     } else {
       const rel = sheetMode.rel, f = P(focusId);
@@ -976,12 +996,6 @@ document.addEventListener("click", e => {
       return render();
     }
     if(id === focusId) return openSheet({edit:id});
-    // someone with no recorded parents AND no recorded children (e.g. a
-    // spouse who was never actually added as a parent on their kids, just
-    // linked as a partner) has nothing to navigate to - tapping them to
-    // "explore" would just collapse the view down to them alone with
-    // nobody else on screen, so open them for editing instead.
-    if(p && !parentsOf(p).length && !childrenOf(p.id).length) return openSheet({edit:id});
     return go(id);
   }
   const a = e.target.closest("[data-add]"); if(a) return openSheet({rel:a.dataset.add});

@@ -35,7 +35,7 @@ service cloud.firestore {
       return validId(id) && exists(/databases/$(database)/documents/trees/$(id));
     }
     function validPerson(p) {
-      return p.keys().hasOnly(['name', 'firstName', 'middleName', 'lastName', 'maidenName', 'gender', 'born', 'bornMonth', 'bornDay', 'died', 'diedMonth', 'diedDay', 'place', 'note', 'parents', 'spouses', 'notPartnerWith', 'updated', 'placeholder', 'anchor'])
+      return p.keys().hasOnly(['name', 'firstName', 'middleName', 'lastName', 'maidenName', 'gender', 'born', 'bornMonth', 'bornDay', 'died', 'diedMonth', 'diedDay', 'place', 'note', 'parents', 'spouses', 'notPartnerWith', 'divorced', 'updated', 'placeholder', 'anchor'])
         && p.name is string && p.name.size() <= 200
         && (!('firstName' in p) || (p.firstName is string && p.firstName.size() <= 100))
         && (!('middleName' in p) || (p.middleName is string && p.middleName.size() <= 100))
@@ -47,7 +47,8 @@ service cloud.firestore {
         && (!('anchor' in p) || p.anchor is bool)
         && p.parents is list && p.parents.size() <= 2
         && p.spouses is list && p.spouses.size() <= 20
-        && (!('notPartnerWith' in p) || (p.notPartnerWith is list && p.notPartnerWith.size() <= 20));
+        && (!('notPartnerWith' in p) || (p.notPartnerWith is list && p.notPartnerWith.size() <= 20))
+        && (!('divorced' in p) || (p.divorced is list && p.divorced.size() <= 20));
     }
   }
 }

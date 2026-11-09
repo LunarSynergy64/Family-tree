@@ -250,8 +250,10 @@ function placeAncestor(placed, edges, id, excludeSpouseId, xLeft, width, gen){
     });
     // when both parents are each their own blood ancestor fork (both have
     // their own further ancestry, so neither is a plain dead-end spouse
-    // attachment), they still need their tie line drawn explicitly here.
-    if(parents.length===2 && (parents[0].spouses||[]).includes(parents[1].id)){
+    // attachment), they still need a tie line drawn here - sharing this
+    // child is what makes them a couple for this diagram, whether or not
+    // they were separately linked as partners.
+    if(parents.length===2){
       edges.push({tie:true, a:parentPos[0], b:parentPos[1]});
     }
   }

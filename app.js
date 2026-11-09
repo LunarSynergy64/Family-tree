@@ -302,12 +302,20 @@ function placeAncestor(placed, edges, id, excludeSpouseId, xLeft, width, gen){
 }
 function placeDescendant(placed, edges, id, xLeft, width, gen){
   const p = P(id);
-  const x = xLeft + width/2;
+  const partners = partnersOf(p);
+  // The pivot + their spouse(s) only need (1 + partners.length) slots, but
+  // `width` can be wider than that to make room for grandchildren below -
+  // center that couple unit within the full width rather than centering
+  // the pivot alone, otherwise a spouse can land right on the boundary
+  // with the next sibling's own space when there's no extra room needed.
+  const unitWidth = 1 + partners.length;
+  const unitLeft = xLeft + (width-unitWidth)/2;
+  const x = unitLeft + 0.5;
   placed.push({id:p.id, x, gen, placeholder:!!p.placeholder});
 
-  let cursor = x+1;
+  let cursor = unitLeft + 1.5;
   const spouseX = new Map();
-  partnersOf(p).forEach(sp=>{
+  partners.forEach(sp=>{
     const sx = cursor; cursor++;
     placed.push({id:sp.id, x:sx, gen, dim:true, placeholder:!!sp.placeholder, deadEnd:true});
     edges.push({tie:true, a:{x, gen}, b:{x:sx, gen}});

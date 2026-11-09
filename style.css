@@ -6,12 +6,12 @@
   --body:"Alegreya Sans","Segoe UI",system-ui,sans-serif;
   --gutter-l:max(16px,env(safe-area-inset-left,0px));
   --gutter-r:max(16px,env(safe-area-inset-right,0px));
-  --male:#b5493d; --female:#3f63ad;
+  --male:#3f6fad; --female:#c15b93;
 }
 @media (prefers-color-scheme:dark){:root{
   --paper:#111714; --card:#19211d; --ink:#e4ebe7; --muted:#93a29b; --line:#2b3631;
   --accent:#86bfaa; --accent-ink:#0f1a15; --accent-soft:#1e2f28; --danger:#e47d6c;
-  --male:#e2897c; --female:#89a6e2; color-scheme:dark}}
+  --male:#89aee2; --female:#e28bc0; color-scheme:dark}}
 *{box-sizing:border-box}
 [hidden]{display:none!important}
 html,body{background:var(--paper);margin:0}

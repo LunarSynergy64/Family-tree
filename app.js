@@ -308,6 +308,15 @@ function firstReachableAnchor(id, visited){
   }
   return null;
 }
+// A couple's left/right order is always by gender (male left, female
+// right, unknown gender in between) rather than by who happens to be the
+// blood relative being traced through at the moment - otherwise the same
+// couple flips sides depending on which side of the family is currently
+// expanding (switching from Dad's anchor to Mom's makes HER the "pivot"
+// instead of him, which used to swap which side each of them sat on).
+const genderRank = p => !p ? 1 : p.gender==="m" ? 0 : p.gender==="f" ? 2 : 1;
+const sortIdsByGender = ids => [...ids].sort((a,b)=>genderRank(P(a))-genderRank(P(b)));
+const sortCoupleByGender = people => [...people].sort((a,b)=>genderRank(a)-genderRank(b));
 function splitParents(parents){
   if(parents.length===2 && currentAnchor){
     // once one of the two parents IS the active anchor itself, the search
@@ -315,7 +324,7 @@ function splitParents(parents){
     // their spouse (via the usual attachment below), not a second,
     // duplicate "suppressed" placement of the same person.
     if(parents[0].id===currentAnchor || parents[1].id===currentAnchor){
-      return {expand:parents, suppressed:null};
+      return {expand:sortCoupleByGender(parents), suppressed:null};
     }
     const leads = parents.map(par=>reachableAnchors(par.id).has(currentAnchor));
     if(leads[0] !== leads[1]){
@@ -323,7 +332,7 @@ function splitParents(parents){
       return {expand:[parents[idx]], suppressed:parents[1-idx]};
     }
   }
-  return {expand:parents, suppressed:null};
+  return {expand: parents.length===2 ? sortCoupleByGender(parents) : parents, suppressed:null};
 }
 
 function ancWidth(id, excludeSpouseId, extraPartnerId){
@@ -408,7 +417,13 @@ function placeAncestor(placed, edges, id, excludeSpouseId, xLeft, width, gen, ex
   let pivotPos = null;
   folks.forEach(f=>{
     const person = f.person;
-    const x = cursor + 0.5; cursor += 1;
+    const partners = partnersOf(person).filter(s=>!(f.isPivot && s.id===excludeSpouseId));
+    const extra = (f.isPivot && extraPartnerId) ? P(extraPartnerId) : null;
+    const unitIds = sortIdsByGender([person.id, ...partners.map(s=>s.id), ...(extra?[extra.id]:[])]);
+    const posOf = {};
+    unitIds.forEach(uid => { posOf[uid] = cursor+0.5; cursor++; });
+
+    const x = posOf[person.id];
     placed.push({id:person.id, x, gen, half:f.half, placeholder:!!person.placeholder, deadEnd:!f.isPivot});
     if(f.isPivot) pivotPos = {x, gen};
 
@@ -419,18 +434,15 @@ function placeAncestor(placed, edges, id, excludeSpouseId, xLeft, width, gen, ex
     // to a single midpoint trunk (adjacent:false forces a stub per parent).
     if(connected.length) edges.push({childX:x, childGen:gen, parents:connected, adjacent:false});
 
-    partnersOf(person).filter(s=>!(f.isPivot && s.id===excludeSpouseId)).forEach(sp=>{
-      const sx = cursor+0.5; cursor++;
+    partners.forEach(sp=>{
+      const sx = posOf[sp.id];
       placed.push({id:sp.id, x:sx, gen, dim:true, placeholder:!!sp.placeholder, deadEnd:true});
       edges.push({tie:true, a:{x, gen}, b:{x:sx, gen}});
     });
-    if(f.isPivot && extraPartnerId){
-      const ep = P(extraPartnerId);
-      if(ep){
-        const sx = cursor+0.5; cursor++;
-        placed.push({id:ep.id, x:sx, gen, dim:true, placeholder:!!ep.placeholder, deadEnd:true});
-        edges.push({tie:true, a:{x, gen}, b:{x:sx, gen}});
-      }
+    if(extra){
+      const sx = posOf[extra.id];
+      placed.push({id:extra.id, x:sx, gen, dim:true, placeholder:!!extra.placeholder, deadEnd:true});
+      edges.push({tie:true, a:{x, gen}, b:{x:sx, gen}});
     }
   });
   return pivotPos;
@@ -445,13 +457,15 @@ function placeDescendant(placed, edges, id, xLeft, width, gen){
   // with the next sibling's own space when there's no extra room needed.
   const unitWidth = 1 + partners.length;
   const unitLeft = xLeft + (width-unitWidth)/2;
-  const x = unitLeft + 0.5;
+  const unitIds = sortIdsByGender([p.id, ...partners.map(s=>s.id)]);
+  const posOf = {};
+  unitIds.forEach((uid,i) => { posOf[uid] = unitLeft + i + 0.5; });
+  const x = posOf[p.id];
   placed.push({id:p.id, x, gen, placeholder:!!p.placeholder});
 
-  let cursor = unitLeft + 1.5;
   const spouseX = new Map();
   partners.forEach(sp=>{
-    const sx = cursor; cursor++;
+    const sx = posOf[sp.id];
     placed.push({id:sp.id, x:sx, gen, dim:true, placeholder:!!sp.placeholder, deadEnd:true});
     edges.push({tie:true, a:{x, gen}, b:{x:sx, gen}});
     spouseX.set(sp.id, sx);

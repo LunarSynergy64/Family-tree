@@ -35,7 +35,7 @@ service cloud.firestore {
       return validId(id) && exists(/databases/$(database)/documents/trees/$(id));
     }
     function validPerson(p) {
-      return p.keys().hasOnly(['name', 'born', 'died', 'place', 'note', 'parents', 'spouses', 'updated', 'placeholder'])
+      return p.keys().hasOnly(['name', 'born', 'bornMonth', 'bornDay', 'died', 'diedMonth', 'diedDay', 'place', 'note', 'parents', 'spouses', 'updated', 'placeholder'])
         && p.name is string && p.name.size() <= 200
         && (!('note' in p) || (p.note is string && p.note.size() <= 5000))
         && (!('placeholder' in p) || p.placeholder is bool)

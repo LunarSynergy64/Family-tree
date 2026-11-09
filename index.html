@@ -67,9 +67,33 @@
     <h3 id="sheetTitle">Add person</h3>
     <label id="pickWrap">Who <select id="f-existing"></select></label>
     <label class="newonly">Full name <input id="f-name" placeholder="e.g. Rosa Martinez" maxlength="200"></label>
-    <div class="two newonly">
-      <label>Born (year) <input id="f-born" type="number" inputmode="numeric" placeholder="e.g. 1952" min="1" max="2200" step="1"></label>
-      <label>Died (year) <input id="f-died" type="number" inputmode="numeric" placeholder="Blank if living" min="1" max="2200" step="1"></label>
+    <div class="newonly">
+      <span class="fieldlabel">Born</span>
+      <div class="three">
+        <input id="f-born-y" type="number" inputmode="numeric" placeholder="Year" min="1" max="2200" step="1">
+        <select id="f-born-m">
+          <option value="">Month</option>
+          <option value="1">Jan</option><option value="2">Feb</option><option value="3">Mar</option>
+          <option value="4">Apr</option><option value="5">May</option><option value="6">Jun</option>
+          <option value="7">Jul</option><option value="8">Aug</option><option value="9">Sep</option>
+          <option value="10">Oct</option><option value="11">Nov</option><option value="12">Dec</option>
+        </select>
+        <input id="f-born-d" type="number" inputmode="numeric" placeholder="Day" min="1" max="31" step="1">
+      </div>
+    </div>
+    <div class="newonly">
+      <span class="fieldlabel">Died (blank if living)</span>
+      <div class="three">
+        <input id="f-died-y" type="number" inputmode="numeric" placeholder="Year" min="1" max="2200" step="1">
+        <select id="f-died-m">
+          <option value="">Month</option>
+          <option value="1">Jan</option><option value="2">Feb</option><option value="3">Mar</option>
+          <option value="4">Apr</option><option value="5">May</option><option value="6">Jun</option>
+          <option value="7">Jul</option><option value="8">Aug</option><option value="9">Sep</option>
+          <option value="10">Oct</option><option value="11">Nov</option><option value="12">Dec</option>
+        </select>
+        <input id="f-died-d" type="number" inputmode="numeric" placeholder="Day" min="1" max="31" step="1">
+      </div>
     </div>
     <label class="newonly">Where they're from <input id="f-place" placeholder="Town, state or country"></label>
     <label id="otherWrap">Other parent <select id="f-other"></select></label>

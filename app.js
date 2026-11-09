@@ -8,6 +8,7 @@ const fs = getFirestore(fb);
 
 /* ================= helpers ================= */
 const $ = s => document.querySelector(s);
+const $$ = s => [...document.querySelectorAll(s)];
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const keyGet = k => { try { return localStorage.getItem(k); } catch(e) { return null; } };
 const keySet = (k,v) => { try { localStorage.setItem(k,v); } catch(e) {} };
@@ -25,6 +26,18 @@ function formatDate(y,m,d){
 const birthKnown = p => p.born!=null && p.born!=="";
 function birthLabel(p){ return formatDate(p.born,p.bornMonth,p.bornDay) || "Unknown date of Birth"; }
 function toast(msg){ const t=$("#toast"); t.textContent=msg; t.hidden=false; clearTimeout(toast.t); toast.t=setTimeout(()=>t.hidden=true,3500); }
+
+const fullName = (first, middle, last) => [first, middle, last].map(s=>(s||"").trim()).filter(Boolean).join(" ");
+/* old entries only have a single `name` string - split it heuristically
+   (first word = first name, last word = last name) so re-opening one for
+   editing doesn't dump their whole name into a single blank field. */
+function splitLegacyName(name){
+  const w = (name||"").trim().split(/\s+/).filter(Boolean);
+  if(!w.length) return {first:"", middle:"", last:""};
+  if(w.length===1) return {first:w[0], middle:"", last:""};
+  if(w.length===2) return {first:w[0], middle:"", last:w[1]};
+  return {first:w[0], middle:w.slice(1,-1).join(" "), last:w[w.length-1]};
+}
 
 async function treeKey(name, pass){
   const norm = name.trim().toLowerCase().replace(/\s+/g," ");
@@ -46,6 +59,19 @@ let sheetMode = null;
 let editCoParents = [];
 const app = $("#app");
 const P = id => people.get(id);
+if(keyGet("ft-colorgender")==="1") app.classList.add("color-gender");
+
+/* zoom only affects the coordinate-based pedigree grid (the "zoom" CSS
+   property rescales its whole layout box, scrollable area included, so
+   #app's native scrollbars stay correct at any zoom level - no coordinate
+   math to redo, unlike the browser's own page zoom which scales everything
+   including the header and dock). */
+let zoom = Math.min(1.5, Math.max(0.4, Number(keyGet("ft-zoom")) || 1));
+function applyZoom(){ document.documentElement.style.setProperty("--zoom", zoom); }
+applyZoom();
+$("#zoomIn").addEventListener("click", () => { zoom = Math.min(1.5, +(zoom+0.15).toFixed(2)); applyZoom(); keySet("ft-zoom", zoom); });
+$("#zoomOut").addEventListener("click", () => { zoom = Math.max(0.4, +(zoom-0.15).toFixed(2)); applyZoom(); keySet("ft-zoom", zoom); });
+$("#zoomReset").addEventListener("click", () => { zoom = 1; applyZoom(); keySet("ft-zoom", zoom); });
 
 function showHome(){
   if(unsub){ unsub(); unsub = null; }
@@ -149,7 +175,11 @@ function years(p){
   if(d) return `d. ${d}`;
   return "";
 }
-const surname = p => { const w=(p.name||"").trim().split(/\s+/); return w.length>1 ? w[w.length-1] : (w[0]||"Unnamed"); };
+function surname(p){
+  if(p.lastName) return p.lastName;
+  const w = (p.name||"").trim().split(/\s+/);
+  return w.length>1 ? w[w.length-1] : (w[0]||"Unnamed");
+}
 
 /* ================= saving ================= */
 const toYear = v => { const n = parseInt(v,10); return Number.isFinite(n) ? n : null; };
@@ -157,6 +187,8 @@ const toSmall = (v,max) => { const n = parseInt(v,10); return (Number.isFinite(n
 async function put(p){
   const data = {
     name: p.name||"",
+    firstName: p.firstName||"", middleName: p.middleName||"", lastName: p.lastName||"",
+    maidenName: p.maidenName||"", gender: p.gender||"",
     born: toYear(p.born), bornMonth: toSmall(p.bornMonth,12), bornDay: toSmall(p.bornDay,31),
     died: toYear(p.died), diedMonth: toSmall(p.diedMonth,12), diedDay: toSmall(p.diedDay,31),
     place: p.place||"", note: p.note||"",
@@ -258,14 +290,22 @@ function splitParents(parents){
   return {expand:parents, suppressed:null};
 }
 
-function ancWidth(id, excludeSpouseId){
+function ancWidth(id, excludeSpouseId, extraPartnerId){
   const p = P(id);
   const sibs = siblingsOf(p).map(s=>s.p);
   const folks = [p, ...sibs];
-  const rowWidth = folks.reduce((sum,f)=> sum + 1 + partnersOf(f).filter(s=>!(f.id===p.id && s.id===excludeSpouseId)).length, 0);
+  const rowWidth = folks.reduce((sum,f)=> sum + 1 + partnersOf(f).filter(s=>!(f.id===p.id && s.id===excludeSpouseId)).length + ((f.id===p.id && extraPartnerId)?1:0), 0);
   const {expand, suppressed} = splitParents(parentsOf(p));
+  // a suppressed co-parent who IS already a registered spouse gets placed
+  // by the expanding parent's own row, like any other partner - only a
+  // suppressed co-parent with no spouse record of their own needs this
+  // extra reserved unit, passed down so it lands right next to them.
   const upWidth = expand.length
-    ? expand.reduce((sum,par,i)=>sum+ancWidth(par.id, expand.length>1?expand[1-i].id:null),0) + (suppressed?1:0)
+    ? expand.reduce((sum,par,i)=>{
+        const exclude = expand.length>1 ? expand[1-i].id : null;
+        const extra = (expand.length===1 && suppressed && !(par.spouses||[]).includes(suppressed.id)) ? suppressed.id : null;
+        return sum + ancWidth(par.id, exclude, extra);
+      }, 0)
     : 0;
   return Math.max(rowWidth, upWidth, 1);
 }
@@ -277,21 +317,23 @@ function descWidth(id){
   return Math.max(rowWidth, downWidth, 1);
 }
 
-function placeAncestor(placed, edges, id, excludeSpouseId, xLeft, width, gen){
+function placeAncestor(placed, edges, id, excludeSpouseId, xLeft, width, gen, extraPartnerId){
   const p = P(id);
   const parents = parentsOf(p);
   const {expand, suppressed} = splitParents(parents);
-  // when there's exactly one expanding parent and one suppressed, the
-  // expanding parent's own row must not ALSO auto-attach the suppressed
-  // one as a plain dead-end spouse - we're placing them ourselves below.
-  const excludeFor = i => expand.length>1 ? expand[1-i].id : (suppressed ? suppressed.id : null);
   const parentPos = [];
   if(expand.length){
-    const widths = expand.map((par,i)=>ancWidth(par.id, excludeFor(i)));
-    const totalW = widths.reduce((a,b)=>a+b,0) + (suppressed?1:0);
+    // same reserved-extra-unit rule as ancWidth: only a suppressed
+    // co-parent with no spouse record of their own needs to ride along
+    // as an extra attachment on the expanding parent's own row - one
+    // already recorded as a spouse gets placed by that row normally.
+    const excludeFor = i => expand.length>1 ? expand[1-i].id : null;
+    const extraFor = i => (expand.length===1 && suppressed && !(expand[i].spouses||[]).includes(suppressed.id)) ? suppressed.id : null;
+    const widths = expand.map((par,i)=>ancWidth(par.id, excludeFor(i), extraFor(i)));
+    const totalW = widths.reduce((a,b)=>a+b,0);
     let px = xLeft + (width-totalW)/2;
     expand.forEach((par,i)=>{
-      parentPos.push(placeAncestor(placed, edges, par.id, excludeFor(i), px, widths[i], gen-1));
+      parentPos.push(placeAncestor(placed, edges, par.id, excludeFor(i), px, widths[i], gen-1, extraFor(i)));
       px += widths[i];
     });
     // when both parents are each their own blood ancestor fork (both have
@@ -302,19 +344,14 @@ function placeAncestor(placed, edges, id, excludeSpouseId, xLeft, width, gen){
     if(expand.length===2 && !(expand[0].notPartnerWith||[]).includes(expand[1].id)){
       edges.push({tie:true, a:parentPos[0], b:parentPos[1]});
     }
-    if(suppressed){
-      // the side that doesn't lead back to the tree's shared starting
-      // point - shown tied to the expanding parent, but never expanded.
-      const anchor = parentPos[0];
-      const sx = px + 0.5;
-      placed.push({id:suppressed.id, x:sx, gen:anchor.gen, dim:true, placeholder:!!suppressed.placeholder, deadEnd:true});
-      edges.push({tie:true, a:{x:anchor.x, gen:anchor.gen}, b:{x:sx, gen:anchor.gen}});
-    }
+    // a suppressed co-parent is otherwise placed by the expanding parent's
+    // own row below (either normally, as a registered spouse, or via
+    // extraPartnerId right above) - nothing left to do here.
   }
   const sibs = siblingsOf(p);
   const folks = [{person:p, half:false, isPivot:true}, ...sibs.map(s=>({person:s.p, half:s.half, isPivot:false}))]
     .sort((a,b)=>byBorn(a.person,b.person));
-  const rowWidth = folks.reduce((sum,f)=> sum + 1 + partnersOf(f.person).filter(s=>!(f.isPivot && s.id===excludeSpouseId)).length, 0);
+  const rowWidth = folks.reduce((sum,f)=> sum + 1 + partnersOf(f.person).filter(s=>!(f.isPivot && s.id===excludeSpouseId)).length + ((f.isPivot && extraPartnerId)?1:0), 0);
   // Centering this row purely within the space handed down from the child
   // below breaks once the pivot has many siblings: the pivot's own spot
   // inside that wide sibling row depends on sort order, not the row's
@@ -349,6 +386,14 @@ function placeAncestor(placed, edges, id, excludeSpouseId, xLeft, width, gen){
       placed.push({id:sp.id, x:sx, gen, dim:true, placeholder:!!sp.placeholder, deadEnd:true});
       edges.push({tie:true, a:{x, gen}, b:{x:sx, gen}});
     });
+    if(f.isPivot && extraPartnerId){
+      const ep = P(extraPartnerId);
+      if(ep){
+        const sx = cursor+0.5; cursor++;
+        placed.push({id:ep.id, x:sx, gen, dim:true, placeholder:!!ep.placeholder, deadEnd:true});
+        edges.push({tie:true, a:{x, gen}, b:{x:sx, gen}});
+      }
+    }
   });
   return pivotPos;
 }
@@ -440,8 +485,10 @@ function bubbleHtml(n, x, y){
   const p = P(n.id); if(!p) return "";
   if(p.placeholder) return `<button class="node ph" style="left:${x}px;top:${y}px" data-go="${esc(n.id)}">Unknown</button>`;
   const more = n.deadEnd && (parentsOf(p).length || childrenOf(p.id).length);
-  return `<button class="node${n.dim?" dim":""}${n.id===focusId?" me":""}${more?" more":""}" style="left:${x}px;top:${y}px" data-go="${esc(n.id)}">
+  const genderCls = p.gender==="m" ? " g-m" : p.gender==="f" ? " g-f" : "";
+  return `<button class="node${n.dim?" dim":""}${n.id===focusId?" me":""}${more?" more":""}${genderCls}" style="left:${x}px;top:${y}px" data-go="${esc(n.id)}">
     <span class="nm">${esc(p.name||"Unnamed")}</span>
+    ${p.maidenName?`<span class="maiden">née ${esc(p.maidenName)}</span>`:""}
     <span class="yrs${birthKnown(p)?"":" unk"}">${esc(birthLabel(p))}</span>
     ${n.half?`<span class="chip">half</span>`:""}
   </button>`;
@@ -449,7 +496,7 @@ function bubbleHtml(n, x, y){
 function dockHtml(f){
   if(!f || f.placeholder) return "";
   return `<div class="dock">
-    <div class="dockInfo"><strong>${esc(f.name||"Unnamed")}</strong>${years(f)?` <span class="yrs">${esc(years(f))}</span>`:""}${f.place?`<div class="place">${esc(f.place)}</div>`:""}</div>
+    <div class="dockInfo"><strong>${esc(f.name||"Unnamed")}</strong>${f.maidenName?` <span class="maiden">née ${esc(f.maidenName)}</span>`:""}${years(f)?` <span class="yrs">${esc(years(f))}</span>`:""}${f.place?`<div class="place">${esc(f.place)}</div>`:""}</div>
     <div class="dockBtns">
       ${(f.parents||[]).length<2?`<button class="dbtn" data-add="parent">+ Parent</button>`:""}
       <button class="dbtn" data-add="partner">+ Partner</button>
@@ -520,7 +567,8 @@ function renderAll(){
 }
 function card(p){
   const kids = childrenOf(p.id).length, y = years(p);
-  return `<button class="card" data-go="${esc(p.id)}"><span class="nm">${esc(p.name||"Unnamed")}</span>${y?`<span class="yrs">${esc(y)}</span>`:""}${kids?`<span class="meta"><span class="chip">${kids} ${kids===1?"child":"children"}</span></span>`:""}</button>`;
+  const genderCls = p.gender==="m" ? " g-m" : p.gender==="f" ? " g-f" : "";
+  return `<button class="card${genderCls}" data-go="${esc(p.id)}"><span class="nm">${esc(p.name||"Unnamed")}</span>${p.maidenName?`<span class="maiden">née ${esc(p.maidenName)}</span>`:""}${y?`<span class="yrs">${esc(y)}</span>`:""}${kids?`<span class="meta"><span class="chip">${kids} ${kids===1?"child":"children"}</span></span>`:""}</button>`;
 }
 
 function render(){
@@ -528,6 +576,7 @@ function render(){
   $("#tabTree").setAttribute("aria-pressed", view==="tree");
   $("#tabAll").setAttribute("aria-pressed", view==="all");
   $("#backBtn").hidden = !(view==="tree" && trail.length);
+  $("#zoomCtl").hidden = !(view==="tree" && loaded && people.size);
   if(!loaded){ app.innerHTML = `<p class="hint">${esc(offlineNote || "Opening the tree…")}</p>`; return; }
   const hadFocus = document.activeElement && document.activeElement.id==="q";
   app.innerHTML = (offlineNote?`<p class="note">${esc(offlineNote)}</p>`:"") + (view==="tree" ? renderPedigree() : renderAll());
@@ -536,17 +585,30 @@ function render(){
 
 /* ================= add / edit sheet ================= */
 const relWords = {root:"Add the first person", parent:"Add a parent", partner:"Add a partner", child:"Add a child", sibling:"Add a brother or sister"};
+function setGender(g){
+  $("#f-gender").value = g;
+  $$("#genderToggle button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.gender===g)));
+  $("#maidenWrap").hidden = g!=="f";
+}
 function openSheet(mode){
   sheetMode = mode;
   const f = P(focusId), form = $("#sheetForm");
   form.reset(); form.classList.remove("picking");
+  setGender("");
   $("#delZone").hidden = true; $("#delConfirm").hidden = true; $("#delBtn").hidden = false;
   $("#otherWrap").hidden = true; $("#linkWrap").hidden = true; $("#pickWrap").hidden = true;
   $("#coParentWrap").hidden = true; editCoParents = [];
   if(mode.edit){
     const p = P(mode.edit);
     $("#sheetTitle").textContent = p.placeholder ? "Who was this?" : "Edit details";
-    $("#f-name").value=p.name||"";
+    if(p.firstName || p.middleName || p.lastName){
+      $("#f-first").value=p.firstName||""; $("#f-middle").value=p.middleName||""; $("#f-last").value=p.lastName||"";
+    } else {
+      const sp = splitLegacyName(p.name);
+      $("#f-first").value=sp.first; $("#f-middle").value=sp.middle; $("#f-last").value=sp.last;
+    }
+    $("#f-maiden").value=p.maidenName||"";
+    setGender(p.gender||"");
     $("#f-born-y").value=p.born??""; $("#f-born-m").value=p.bornMonth??""; $("#f-born-d").value=p.bornDay??"";
     $("#f-died-y").value=p.died??""; $("#f-died-m").value=p.diedMonth??""; $("#f-died-d").value=p.diedDay??"";
     $("#f-place").value=p.place||""; $("#f-note").value=p.note||"";
@@ -585,23 +647,28 @@ function openSheet(mode){
     }
   }
   $("#sheet").hidden = false;
-  setTimeout(()=>$("#f-name").focus(), 50);
+  setTimeout(()=>$("#f-first").focus(), 50);
 }
 function closeSheet(){ $("#sheet").hidden = true; sheetMode = null; }
 
 $("#f-existing").addEventListener("change", e => $("#sheetForm").classList.toggle("picking", !!e.target.value));
+$$("#genderToggle button").forEach(b => b.addEventListener("click", () => setGender(b.dataset.gender)));
 
 $("#sheetForm").addEventListener("submit", async e => {
   e.preventDefault();
   if(!sheetMode) return;
   const pickedId = !$("#pickWrap").hidden ? $("#f-existing").value : "";
+  const firstName = $("#f-first").value.trim(), middleName = $("#f-middle").value.trim(), lastName = $("#f-last").value.trim();
+  const gender = $("#f-gender").value;
   const fields = {
-    name: $("#f-name").value.trim(),
+    name: fullName(firstName, middleName, lastName),
+    firstName, middleName, lastName, gender,
+    maidenName: gender==="f" ? $("#f-maiden").value.trim() : "",
     born: $("#f-born-y").value.trim(), bornMonth: $("#f-born-m").value, bornDay: $("#f-born-d").value.trim(),
     died: $("#f-died-y").value.trim(), diedMonth: $("#f-died-m").value, diedDay: $("#f-died-d").value.trim(),
     place: $("#f-place").value.trim(), note: $("#f-note").value.trim()
   };
-  if(!pickedId && !fields.name){ toast("Add a name first."); $("#f-name").focus(); return; }
+  if(!pickedId && !fields.name){ toast("Add a name first."); $("#f-first").focus(); return; }
   $("#saveBtn").disabled = true;
   try {
     if(sheetMode.edit){
@@ -686,7 +753,12 @@ $("#menuBtn").addEventListener("click", () => {
   const f = P(focusId);
   $("#setDefaultBtn").hidden = !f || f.placeholder || tree.defaultFocus===f.id;
   $("#setDefaultBtn").textContent = f ? `Set ${f.name||"this person"} as everyone's starting point` : "Set as everyone's starting point";
+  $("#colorGenderToggle").checked = app.classList.contains("color-gender");
   $("#menu").hidden = false;
+});
+$("#colorGenderToggle").addEventListener("change", e => {
+  app.classList.toggle("color-gender", e.target.checked);
+  keySet("ft-colorgender", e.target.checked ? "1" : "0");
 });
 $("#setDefaultBtn").addEventListener("click", async () => {
   const f = P(focusId); if(!f) return;

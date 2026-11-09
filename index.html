@@ -58,6 +58,11 @@
     <button class="round" id="menuBtn" aria-label="Tree options">⋯</button>
   </div></header>
   <main id="app"><p class="hint">Opening the tree…</p></main>
+  <div class="zoomCtl" id="zoomCtl" hidden>
+    <button type="button" id="zoomIn" aria-label="Zoom in">+</button>
+    <button type="button" id="zoomReset" aria-label="Reset zoom">⤢</button>
+    <button type="button" id="zoomOut" aria-label="Zoom out">−</button>
+  </div>
 </section>
 
 <!-- ============ SHEET: add / edit person ============ -->
@@ -66,7 +71,24 @@
   <form class="panel" id="sheetForm" autocomplete="off">
     <h3 id="sheetTitle">Add person</h3>
     <label id="pickWrap">Who <select id="f-existing"></select></label>
-    <label class="newonly">Full name <input id="f-name" placeholder="e.g. Rosa Martinez" maxlength="200"></label>
+    <div class="newonly">
+      <span class="fieldlabel">Name</span>
+      <div class="namecols">
+        <input id="f-first" placeholder="First" maxlength="100">
+        <input id="f-middle" placeholder="Middle" maxlength="100">
+        <input id="f-last" placeholder="Last" maxlength="100">
+      </div>
+    </div>
+    <div class="newonly">
+      <span class="fieldlabel">Gender</span>
+      <div class="segmented" id="genderToggle" role="group">
+        <button type="button" data-gender="" aria-pressed="true">Unknown</button>
+        <button type="button" data-gender="m" aria-pressed="false">Male</button>
+        <button type="button" data-gender="f" aria-pressed="false">Female</button>
+      </div>
+      <input type="hidden" id="f-gender" value="">
+    </div>
+    <label class="newonly" id="maidenWrap" hidden>Maiden name <input id="f-maiden" placeholder="e.g. Chin" maxlength="100"></label>
     <div class="newonly">
       <span class="fieldlabel">Born</span>
       <div class="three">
@@ -128,6 +150,7 @@
     <p class="hint" id="inviteName"></p>
     <div class="menu-list">
       <button type="button" class="ghost" id="setDefaultBtn">Set as everyone's starting point</button>
+      <label class="check"><input type="checkbox" id="colorGenderToggle"> Color cards red/blue by gender</label>
       <button type="button" class="ghost" id="switchBtn">Switch to another tree</button>
       <button type="button" class="danger-link" id="forgetBtn">Remove this tree from this device</button>
     </div>

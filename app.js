@@ -248,6 +248,12 @@ function placeAncestor(placed, edges, id, excludeSpouseId, xLeft, width, gen){
       parentPos.push(placeAncestor(placed, edges, par.id, parents.length>1?parents[1-i].id:null, px, widths[i], gen-1));
       px += widths[i];
     });
+    // when both parents are each their own blood ancestor fork (both have
+    // their own further ancestry, so neither is a plain dead-end spouse
+    // attachment), they still need their tie line drawn explicitly here.
+    if(parents.length===2 && (parents[0].spouses||[]).includes(parents[1].id)){
+      edges.push({tie:true, a:parentPos[0], b:parentPos[1]});
+    }
   }
   const sibs = siblingsOf(p);
   const folks = [{person:p, half:false, isPivot:true}, ...sibs.map(s=>({person:s.p, half:s.half, isPivot:false}))]

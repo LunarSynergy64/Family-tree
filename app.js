@@ -28,6 +28,15 @@ function birthLabel(p){ return formatDate(p.born,p.bornMonth,p.bornDay) || "Unkn
 function toast(msg){ const t=$("#toast"); t.textContent=msg; t.hidden=false; clearTimeout(toast.t); toast.t=setTimeout(()=>t.hidden=true,3500); }
 
 const fullName = (first, middle, last) => [first, middle, last].map(s=>(s||"").trim()).filter(Boolean).join(" ");
+// what's shown on cards/bubbles - p.name itself (the full name, middle
+// included) stays the canonical stored/searched/sorted value regardless;
+// this only affects what the UI prints.
+function displayName(p){
+  if(!p) return "";
+  if(showMiddleNames || !p.middleName) return p.name||"";
+  if(p.firstName || p.lastName) return fullName(p.firstName, "", p.lastName);
+  return p.name||"";
+}
 /* old entries only have a single `name` string - split it heuristically
    (first word = first name, last word = last name) so re-opening one for
    editing doesn't dump their whole name into a single blank field. */
@@ -63,8 +72,9 @@ let activeAnchor = null, currentAnchor = null;
 let editCoParents = [];
 const app = $("#app");
 const P = id => people.get(id);
-if(keyGet("ft-colorgender")==="1") app.classList.add("color-gender");
+if(keyGet("ft-colorgender")!=="0") app.classList.add("color-gender");
 let showAnchorMode = keyGet("ft-showanchor")==="1";
+let showMiddleNames = keyGet("ft-showmiddle")==="1";
 
 /* zoom only affects the coordinate-based pedigree grid (the "zoom" CSS
    property rescales its whole layout box, scrollable area included, so
@@ -543,7 +553,7 @@ function bubbleHtml(n, x, y){
   const more = n.deadEnd && (parentsOf(p).length || childrenOf(p.id).length);
   const genderCls = p.gender==="m" ? " g-m" : p.gender==="f" ? " g-f" : "";
   return `<button class="node${n.dim?" dim":""}${n.id===focusId?" me":""}${more?" more":""}${genderCls}" style="left:${x}px;top:${y}px" data-go="${esc(n.id)}">
-    <span class="nm">${esc(p.name||"Unnamed")}${isAnchor(p)?` <span class="anchorBadge" title="Anchor point">⚓</span>`:""}</span>
+    <span class="nm">${esc(displayName(p)||"Unnamed")}${isAnchor(p)?` <span class="anchorBadge" title="Anchor point">⚓</span>`:""}</span>
     ${p.maidenName?`<span class="maiden">née ${esc(p.maidenName)}</span>`:""}
     <span class="yrs${birthKnown(p)?"":" unk"}">${esc(birthLabel(p))}</span>
     ${n.half?`<span class="chip">half</span>`:""}
@@ -552,9 +562,9 @@ function bubbleHtml(n, x, y){
 function dockHtml(f, otherAnchors){
   if(!f || f.placeholder) return "";
   const hint = otherAnchors && otherAnchors.length
-    ? `<p class="anchorHint">Also connected through ${otherAnchors.map(id=>esc(P(id)?.name||"another line")).join(", ")} — tap a parent above to switch sides.</p>` : "";
+    ? `<p class="anchorHint">Also connected through ${otherAnchors.map(id=>esc(displayName(P(id))||"another line")).join(", ")} — tap a parent above to switch sides.</p>` : "";
   return `<div class="dock">
-    <div class="dockInfo"><strong>${esc(f.name||"Unnamed")}</strong>${isAnchor(f)?` <span class="anchorBadge" title="Anchor point">⚓</span>`:""}${f.maidenName?` <span class="maiden">née ${esc(f.maidenName)}</span>`:""}${years(f)?` <span class="yrs">${esc(years(f))}</span>`:""}${f.place?`<div class="place">${esc(f.place)}</div>`:""}${hint}</div>
+    <div class="dockInfo"><strong>${esc(displayName(f)||"Unnamed")}</strong>${isAnchor(f)?` <span class="anchorBadge" title="Anchor point">⚓</span>`:""}${f.maidenName?` <span class="maiden">née ${esc(f.maidenName)}</span>`:""}${years(f)?` <span class="yrs">${esc(years(f))}</span>`:""}${f.place?`<div class="place">${esc(f.place)}</div>`:""}${hint}</div>
     <div class="dockBtns">
       ${(f.parents||[]).length<2?`<button class="dbtn" data-add="parent">+ Parent</button>`:""}
       <button class="dbtn" data-add="partner">+ Partner</button>
@@ -639,7 +649,7 @@ function renderAll(){
 function card(p){
   const kids = childrenOf(p.id).length, y = years(p);
   const genderCls = p.gender==="m" ? " g-m" : p.gender==="f" ? " g-f" : "";
-  return `<button class="card${genderCls}" data-go="${esc(p.id)}"><span class="nm">${esc(p.name||"Unnamed")}${isAnchor(p)?` <span class="anchorBadge" title="Anchor point">⚓</span>`:""}</span>${p.maidenName?`<span class="maiden">née ${esc(p.maidenName)}</span>`:""}${y?`<span class="yrs">${esc(y)}</span>`:""}${kids?`<span class="meta"><span class="chip">${kids} ${kids===1?"child":"children"}</span></span>`:""}</button>`;
+  return `<button class="card${genderCls}" data-go="${esc(p.id)}"><span class="nm">${esc(displayName(p)||"Unnamed")}${isAnchor(p)?` <span class="anchorBadge" title="Anchor point">⚓</span>`:""}</span>${p.maidenName?`<span class="maiden">née ${esc(p.maidenName)}</span>`:""}${y?`<span class="yrs">${esc(y)}</span>`:""}${kids?`<span class="meta"><span class="chip">${kids} ${kids===1?"child":"children"}</span></span>`:""}</button>`;
 }
 
 // Which (focusId, activeAnchor) pair we last auto-scrolled to - re-scroll
@@ -702,7 +712,7 @@ function openSheet(mode){
       editCoParents = coParents.map(cp=>cp.id);
       $("#coParentWrap").hidden = false;
       $("#coParentList").innerHTML = coParents.map(cp =>
-        `<label class="check"><input type="checkbox" data-coparent="${esc(cp.id)}" ${(p.notPartnerWith||[]).includes(cp.id)?"":"checked"}> ${esc(cp.name||"Unnamed")}</label>`
+        `<label class="check"><input type="checkbox" data-coparent="${esc(cp.id)}" ${(p.notPartnerWith||[]).includes(cp.id)?"":"checked"}> ${esc(displayName(cp)||"Unnamed")}</label>`
       ).join("");
     }
   } else {
@@ -713,20 +723,20 @@ function openSheet(mode){
       const others = [...people.values()].filter(p=>!p.placeholder && !blocked.has(p.id)).sort(byName);
       if(others.length){
         $("#pickWrap").hidden = false;
-        $("#f-existing").innerHTML = `<option value="">Someone new</option>` + others.map(p=>`<option value="${esc(p.id)}">${esc(p.name)}${years(p)?" ("+esc(years(p))+")":""}</option>`).join("");
+        $("#f-existing").innerHTML = `<option value="">Someone new</option>` + others.map(p=>`<option value="${esc(p.id)}">${esc(displayName(p))}${years(p)?" ("+esc(years(p))+")":""}</option>`).join("");
       }
     }
     if(mode.rel==="child"){
       $("#otherWrap").hidden = false;
       const otherIds = uniq([...(f.spouses||[]), ...childrenOf(f.id).flatMap(k=>(k.parents||[]).filter(id=>id!==f.id))]);
       const otherCandidates = otherIds.map(P).filter(Boolean);
-      $("#f-other").innerHTML = otherCandidates.map(p=>`<option value="${esc(p.id)}">${esc(p.name)}</option>`).join("") + `<option value="">Not listed / unknown</option>`;
+      $("#f-other").innerHTML = otherCandidates.map(p=>`<option value="${esc(p.id)}">${esc(displayName(p))}</option>`).join("") + `<option value="">Not listed / unknown</option>`;
     }
     if(mode.rel==="parent"){
       const existing = parentsOf(f)[0];
       if(existing && !(existing.spouses||[]).length){
         $("#linkWrap").hidden = false;
-        $("#linkText").textContent = `Partner of ${existing.name}`;
+        $("#linkText").textContent = `Partner of ${displayName(existing)}`;
       }
     }
   }
@@ -739,7 +749,7 @@ let optionsPersonId = null;
 function openPersonOptions(id){
   const p = P(id); if(!p) return;
   optionsPersonId = id;
-  $("#personOptionsTitle").textContent = `Options for ${p.name||"this person"}`;
+  $("#personOptionsTitle").textContent = `Options for ${displayName(p)||"this person"}`;
   const isDefault = tree.defaultFocus === p.id;
   $("#optAnchor").checked = isDefault || !!p.anchor;
   $("#optAnchor").disabled = isDefault;
@@ -752,7 +762,7 @@ $("#optAnchor").addEventListener("change", async e => {
   const p = P(optionsPersonId); if(!p) return;
   const ok = await put({...p, anchor: e.target.checked});
   if(ok){
-    toast(e.target.checked ? `${p.name||"This person"} is now an anchor point.` : `${p.name||"This person"} is no longer an anchor point.`);
+    toast(e.target.checked ? `${displayName(p)||"This person"} is now an anchor point.` : `${displayName(p)||"This person"} is no longer an anchor point.`);
     setFocus(focusId); render();
   }
 });
@@ -821,7 +831,7 @@ $("#sheetForm").addEventListener("submit", async e => {
           let shared = f.parents||[];
           if(!shared.length) shared = [await ensureParentPlaceholder(f.id)];
           person.parents = [...shared];
-        } else if(pickedId) toast(`${person.name} already has parents listed, so they weren't changed.`);
+        } else if(pickedId) toast(`${displayName(person)} already has parents listed, so they weren't changed.`);
         await put(person);
       }
     }
@@ -831,7 +841,7 @@ $("#sheetForm").addEventListener("submit", async e => {
 
 $("#delBtn").addEventListener("click", () => {
   const p = P(sheetMode.edit);
-  $("#delText").textContent = `Remove ${p.name||"this person"} from the tree for everyone? Their relatives stay.`;
+  $("#delText").textContent = `Remove ${displayName(p)||"this person"} from the tree for everyone? Their relatives stay.`;
   $("#delConfirm").hidden = false; $("#delBtn").hidden = true;
 });
 $("#delNo").addEventListener("click", () => { $("#delConfirm").hidden = true; $("#delBtn").hidden = false; });
@@ -859,10 +869,16 @@ $("#menuBtn").addEventListener("click", () => {
   $("#forgetBtn").dataset.armed = "";
   const f = P(focusId);
   $("#setDefaultBtn").hidden = !f || f.placeholder || tree.defaultFocus===f.id;
-  $("#setDefaultBtn").textContent = f ? `Set ${f.name||"this person"} as everyone's starting point` : "Set as everyone's starting point";
+  $("#setDefaultBtn").textContent = f ? `Set ${displayName(f)||"this person"} as everyone's starting point` : "Set as everyone's starting point";
   $("#colorGenderToggle").checked = app.classList.contains("color-gender");
+  $("#showMiddleToggle").checked = showMiddleNames;
   $("#showAnchorToggle").checked = showAnchorMode;
   $("#menu").hidden = false;
+});
+$("#showMiddleToggle").addEventListener("change", e => {
+  showMiddleNames = e.target.checked;
+  keySet("ft-showmiddle", e.target.checked ? "1" : "0");
+  render();
 });
 $("#showAnchorToggle").addEventListener("change", e => {
   showAnchorMode = e.target.checked;
@@ -875,7 +891,7 @@ $("#colorGenderToggle").addEventListener("change", e => {
 $("#setDefaultBtn").addEventListener("click", async () => {
   const f = P(focusId); if(!f) return;
   const ok = await setDefaultFocus(f.id);
-  if(ok){ setFocus(f.id); render(); toast(`${f.name||"This person"} is now everyone's starting point.`); }
+  if(ok){ setFocus(f.id); render(); toast(`${displayName(f)||"This person"} is now everyone's starting point.`); }
   $("#menu").hidden = true;
 });
 $("#copyBtn").addEventListener("click", async () => {

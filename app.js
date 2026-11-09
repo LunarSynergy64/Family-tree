@@ -236,7 +236,7 @@ function descWidth(id){
   return Math.max(rowWidth, downWidth, 1);
 }
 
-function placeAncestor(placed, lines, id, excludeSpouseId, xLeft, width, gen){
+function placeAncestor(placed, edges, id, excludeSpouseId, xLeft, width, gen){
   const p = P(id);
   const parents = parentsOf(p);
   const parentPos = [];
@@ -245,7 +245,7 @@ function placeAncestor(placed, lines, id, excludeSpouseId, xLeft, width, gen){
     const totalW = widths.reduce((a,b)=>a+b,0);
     let px = xLeft + (width-totalW)/2;
     parents.forEach((par,i)=>{
-      parentPos.push(placeAncestor(placed, lines, par.id, parents.length>1?parents[1-i].id:null, px, widths[i], gen-1));
+      parentPos.push(placeAncestor(placed, edges, par.id, parents.length>1?parents[1-i].id:null, px, widths[i], gen-1));
       px += widths[i];
     });
   }
@@ -263,26 +263,29 @@ function placeAncestor(placed, lines, id, excludeSpouseId, xLeft, width, gen){
     if(f.isPivot) pivotPos = {x, gen};
 
     const myParents = person.parents||[];
-    parentPos.forEach((pp,i)=>{ if(myParents.includes(parents[i].id)) lines.push({ax:pp.x, agen:pp.gen, bx:x, bgen:gen}); });
+    const connected = parentPos.filter((pp,i)=> myParents.includes(parents[i].id)).map(pp=>({x:pp.x, gen:pp.gen}));
+    if(connected.length) edges.push({childX:x, childGen:gen, parents:connected});
 
     partnersOf(person).filter(s=>!(f.isPivot && s.id===excludeSpouseId)).forEach(sp=>{
       const sx = cursor+0.5; cursor++;
       placed.push({id:sp.id, x:sx, gen, dim:true, placeholder:!!sp.placeholder, deadEnd:true});
-      lines.push({ax:x, agen:gen, bx:sx, bgen:gen, tie:true});
+      edges.push({tie:true, a:{x, gen}, b:{x:sx, gen}});
     });
   });
   return pivotPos;
 }
-function placeDescendant(placed, lines, id, xLeft, width, gen){
+function placeDescendant(placed, edges, id, xLeft, width, gen){
   const p = P(id);
   const x = xLeft + width/2;
   placed.push({id:p.id, x, gen, placeholder:!!p.placeholder});
 
   let cursor = x+0.5;
+  const spouseX = new Map();
   partnersOf(p).forEach(sp=>{
     const sx = cursor; cursor++;
     placed.push({id:sp.id, x:sx, gen, dim:true, placeholder:!!sp.placeholder, deadEnd:true});
-    lines.push({ax:x, agen:gen, bx:sx, bgen:gen, tie:true});
+    edges.push({tie:true, a:{x, gen}, b:{x:sx, gen}});
+    spouseX.set(sp.id, sx);
   });
 
   const kids = childrenOf(id).sort(byBorn);
@@ -291,12 +294,47 @@ function placeDescendant(placed, lines, id, xLeft, width, gen){
     const totalW = widths.reduce((a,b)=>a+b,0);
     let cx = x - totalW/2;
     kids.forEach((k,i)=>{
-      const kpos = placeDescendant(placed, lines, k.id, cx, widths[i], gen+1);
-      lines.push({ax:x, agen:gen, bx:kpos.x, bgen:gen+1});
+      const kpos = placeDescendant(placed, edges, k.id, cx, widths[i], gen+1);
+      const kp = P(k.id);
+      const parentPts = [{x, gen}];
+      (kp.parents||[]).forEach(pid=>{ if(spouseX.has(pid)) parentPts.push({x:spouseX.get(pid), gen}); });
+      edges.push({childX:kpos.x, childGen:kpos.gen, parents:parentPts});
       cx += widths[i];
     });
   }
   return {x, gen};
+}
+/* Connector lines are grouped by family unit (the exact set of parents a
+   child belongs to), so a couple - or a single known parent - gets one
+   shared trunk down to one bus line, with each child hanging off it by a
+   short stub, rather than a separate line to every parent individually. */
+function renderEdges(edges, px, py){
+  let svg = "";
+  const groups = new Map();
+  edges.forEach(e=>{
+    if(e.tie){
+      svg += `<line x1="${px(e.a.x).toFixed(1)}" y1="${py(e.a.gen).toFixed(1)}" x2="${px(e.b.x).toFixed(1)}" y2="${py(e.b.gen).toFixed(1)}" class="tie-line"/>`;
+      return;
+    }
+    const key = e.parents.map(p=>p.x+","+p.gen).sort().join("|");
+    if(!groups.has(key)) groups.set(key, {parents:e.parents, children:[]});
+    groups.get(key).children.push({x:e.childX, gen:e.childGen});
+  });
+  groups.forEach(g=>{
+    const parentY = py(g.parents[0].gen);
+    const uniqueXs = [...new Set(g.parents.map(p=>p.x))];
+    const anchorX = px(uniqueXs.reduce((a,b)=>a+b,0)/uniqueXs.length);
+    const childY = py(g.children[0].gen);
+    const busY = parentY + (childY-parentY)*0.6;
+    const childPx = g.children.map(c=>px(c.x));
+    const minX = Math.min(anchorX, ...childPx), maxX = Math.max(anchorX, ...childPx);
+    svg += `<line x1="${anchorX.toFixed(1)}" y1="${parentY.toFixed(1)}" x2="${anchorX.toFixed(1)}" y2="${busY.toFixed(1)}" class="fam-line"/>`;
+    if(maxX>minX) svg += `<line x1="${minX.toFixed(1)}" y1="${busY.toFixed(1)}" x2="${maxX.toFixed(1)}" y2="${busY.toFixed(1)}" class="fam-line"/>`;
+    g.children.forEach((c,i)=>{
+      svg += `<line x1="${childPx[i].toFixed(1)}" y1="${busY.toFixed(1)}" x2="${childPx[i].toFixed(1)}" y2="${py(c.gen).toFixed(1)}" class="fam-line"/>`;
+    });
+  });
+  return svg;
 }
 
 function bubbleHtml(n, x, y){
@@ -330,8 +368,10 @@ function renderPedigree(){
   const f = P(focusId);
   if(!f) return `<p class="hint">Nobody to show.</p>`;
 
-  const placed = [], lines = [];
-  const focalPos = placeAncestor(placed, lines, f.id, null, 0, ancWidth(f.id, null), 0);
+  const placed = [], edges = [];
+  const focalPos = placeAncestor(placed, edges, f.id, null, 0, ancWidth(f.id, null), 0);
+  const focalSpouseX = new Map();
+  partnersOf(f).forEach(sp=>{ const n = placed.find(x=>x.id===sp.id); if(n) focalSpouseX.set(sp.id, n.x); });
 
   const kids = childrenOf(f.id).sort(byBorn);
   if(kids.length){
@@ -339,8 +379,11 @@ function renderPedigree(){
     const totalW = widths.reduce((a,b)=>a+b,0);
     let cx = focalPos.x - totalW/2;
     kids.forEach((k,i)=>{
-      const kpos = placeDescendant(placed, lines, k.id, cx, widths[i], 1);
-      lines.push({ax:focalPos.x, agen:0, bx:kpos.x, bgen:1});
+      const kpos = placeDescendant(placed, edges, k.id, cx, widths[i], 1);
+      const kp = P(k.id);
+      const parentPts = [{x:focalPos.x, gen:0}];
+      (kp.parents||[]).forEach(pid=>{ if(focalSpouseX.has(pid)) parentPts.push({x:focalSpouseX.get(pid), gen:0}); });
+      edges.push({childX:kpos.x, childGen:kpos.gen, parents:parentPts});
       cx += widths[i];
     });
   }
@@ -353,7 +396,7 @@ function renderPedigree(){
   const width = (maxX-minX)*SLOT_W + PAD_X*2;
   const height = (maxGen-minGen)*ROW_H + PAD_Y*2 + 170;
 
-  const linesHtml = lines.map(l => `<line x1="${px(l.ax).toFixed(1)}" y1="${py(l.agen).toFixed(1)}" x2="${px(l.bx).toFixed(1)}" y2="${py(l.bgen).toFixed(1)}" class="${l.tie?"tie-line":"fam-line"}"/>`).join("");
+  const linesHtml = renderEdges(edges, px, py);
   const nodesHtml = placed.map(n => bubbleHtml(n, px(n.x), py(n.gen))).join("");
 
   return `<div class="pedigree" style="width:${width}px;height:${height}px">

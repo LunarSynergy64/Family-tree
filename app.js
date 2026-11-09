@@ -56,10 +56,15 @@ let tree = null;            // {key, name, defaultFocus}
 let unsub = null;
 let people = new Map(), focusId = null, trail = [], view = "tree", loaded = false, query = "", offlineNote = "";
 let sheetMode = null;
+// the anchor currently driving layout for this device's session (see
+// setFocus); currentAnchor mirrors it during a render pass so splitParents
+// doesn't need activeAnchor threaded through every call.
+let activeAnchor = null, currentAnchor = null;
 let editCoParents = [];
 const app = $("#app");
 const P = id => people.get(id);
 if(keyGet("ft-colorgender")==="1") app.classList.add("color-gender");
+let showAnchorMode = keyGet("ft-showanchor")==="1";
 
 /* zoom only affects the coordinate-based pedigree grid (the "zoom" CSS
    property rescales its whole layout box, scrollable area included, so
@@ -92,6 +97,7 @@ async function openTree(key, nameHint){
   const data = snap.data();
   const name = data.name || nameHint || "Family Tree";
   tree = {key, name, defaultFocus: data.defaultFocus || null}; saveTree(key, name);
+  activeAnchor = keyGet("ft-anchor-" + key) || null;
   history.replaceState(null, "", location.pathname + "#t=" + key);
   $("#home").hidden = true; $("#treeScreen").hidden = false;
   $("#treeTitle").textContent = name; document.title = name;
@@ -196,6 +202,7 @@ async function put(p){
     notPartnerWith: (p.notPartnerWith||[]).slice(0,20), updated: Date.now()
   };
   if(p.placeholder && !data.name) data.placeholder = true;
+  if(p.anchor) data.anchor = true;
   people.set(p.id, {id:p.id, ...data});
   try { await setDoc(doc(fs, "trees", tree.key, "people", p.id), data); return true; }
   catch(e){ toast("That change didn't save (" + (e.code||"error") + "). Try again."); return false; }
@@ -234,14 +241,26 @@ async function setDefaultFocus(id){
    re-centres the whole grid on them. */
 function pickFocus(){
   if(focusId && P(focusId)) return;
-  if(tree.defaultFocus && P(tree.defaultFocus)){ focusId = tree.defaultFocus; return; }
+  if(tree.defaultFocus && P(tree.defaultFocus)){ setFocus(tree.defaultFocus); return; }
   const all = [...people.values()].filter(p=>!p.placeholder).sort(byName);
-  focusId = all.length ? all[0].id : null;
+  if(all.length) setFocus(all[0].id);
+}
+/* Moves focus to `id`, and keeps the active anchor stable if `id` is
+   still reachable from it (so clicking around inside the same family
+   line never jumps the frame) - only switching anchors when the newly
+   focused person's own lineage doesn't lead back to the one currently
+   showing, e.g. clicking a parent whose side has a different anchor. */
+function setFocus(id){
+  if(!P(id)) return;
+  const reachable = reachableAnchors(id);
+  activeAnchor = (activeAnchor && reachable.has(activeAnchor)) ? activeAnchor : (reachable.size ? firstReachableAnchor(id) : null);
+  focusId = id;
+  if(tree) keySet("ft-anchor-" + tree.key, activeAnchor || "");
 }
 function go(id, push=true){
   if(!P(id)) return;
   if(push && focusId && focusId!==id) trail.push(focusId);
-  focusId=id; view="tree"; render(); window.scrollTo({top:0});
+  setFocus(id); view="tree"; render(); window.scrollTo({top:0});
 }
 
 /* Generations are flat rows (a fixed height apart, never based on birth
@@ -255,33 +274,50 @@ const SLOT_W = 124, ROW_H = 148;
 
 /* A real family tree branches both ways going up, and fully expanding both
    parents at every single generation doubles the width each time - by a
-   few generations it's an unreadable wall. Once the tree has a shared
-   starting point, only the parent whose own ancestry actually leads back
-   to it keeps expanding by default; the other parent (and their whole
-   side) becomes a tap-to-explore dead end, exactly like a spouse. Tapping
-   them re-centers the grid there, and from that new vantage neither of
-   their own parents leads back to the old anchor, so both expand normally
-   - "give me an option to see it from her side" instead of both sides
-   fighting for space at once. */
-function leadsToDefault(id, visited){
-  if(!id || !tree.defaultFocus) return false;
+   few generations it's an unreadable wall. So ancestors only expand up to
+   the nearest "anchor point" - a person marked as a hard stop, either
+   explicitly (their own Anchor point checkbox) or because they're the
+   tree's shared starting point. Someone with two parents who each lead to
+   a DIFFERENT anchor (one parent's line hits Grammy, the other hits a
+   different ancestor entirely) has to pick one side to actively show -
+   that choice is "the active anchor", tracked per device in localStorage
+   and left alone as long as it still applies, so browsing around a family
+   line doesn't make the frame jump every click (see setFocus below). The
+   other side becomes a tap-to-explore dead end, exactly like a spouse -
+   tapping it switches the active anchor to their own side instead. */
+const isAnchor = p => !!p && (p.anchor===true || (tree && tree.defaultFocus===p.id));
+function reachableAnchors(id, visited){
   visited = visited || new Set();
-  if(visited.has(id)) return false;
+  const result = new Set();
+  if(!id || visited.has(id)) return result;
   visited.add(id);
-  if(id === tree.defaultFocus) return true;
-  const p = P(id); if(!p) return false;
-  return (p.parents||[]).some(pid => leadsToDefault(pid, visited));
+  const p = P(id); if(!p) return result;
+  if(isAnchor(p)){ result.add(id); return result; }
+  parentsOf(p).forEach(par => reachableAnchors(par.id, visited).forEach(a=>result.add(a)));
+  return result;
+}
+function firstReachableAnchor(id, visited){
+  visited = visited || new Set();
+  if(!id || visited.has(id)) return null;
+  visited.add(id);
+  const p = P(id); if(!p) return null;
+  if(isAnchor(p)) return id;
+  for(const par of parentsOf(p)){
+    const found = firstReachableAnchor(par.id, visited);
+    if(found) return found;
+  }
+  return null;
 }
 function splitParents(parents){
-  if(parents.length===2 && tree.defaultFocus){
-    // once one of the two parents IS the shared starting point itself,
-    // the search is over - expand both normally, so defaultFocus's own
-    // spouse is just their spouse (via the usual attachment below), not
-    // a second, duplicate "suppressed" placement of the same person.
-    if(parents[0].id===tree.defaultFocus || parents[1].id===tree.defaultFocus){
+  if(parents.length===2 && currentAnchor){
+    // once one of the two parents IS the active anchor itself, the search
+    // is over - expand both normally, so the anchor's own spouse is just
+    // their spouse (via the usual attachment below), not a second,
+    // duplicate "suppressed" placement of the same person.
+    if(parents[0].id===currentAnchor || parents[1].id===currentAnchor){
       return {expand:parents, suppressed:null};
     }
-    const leads = parents.map(par=>leadsToDefault(par.id));
+    const leads = parents.map(par=>reachableAnchors(par.id).has(currentAnchor));
     if(leads[0] !== leads[1]){
       const idx = leads[0] ? 0 : 1;
       return {expand:[parents[idx]], suppressed:parents[1-idx]};
@@ -295,7 +331,9 @@ function ancWidth(id, excludeSpouseId, extraPartnerId){
   const sibs = siblingsOf(p).map(s=>s.p);
   const folks = [p, ...sibs];
   const rowWidth = folks.reduce((sum,f)=> sum + 1 + partnersOf(f).filter(s=>!(f.id===p.id && s.id===excludeSpouseId)).length + ((f.id===p.id && extraPartnerId)?1:0), 0);
-  const {expand, suppressed} = splitParents(parentsOf(p));
+  // an anchor is a hard stop - never recurse past one into its own
+  // parents, even if it happens to have some recorded.
+  const {expand, suppressed} = isAnchor(p) ? {expand:[], suppressed:null} : splitParents(parentsOf(p));
   // a suppressed co-parent who IS already a registered spouse gets placed
   // by the expanding parent's own row, like any other partner - only a
   // suppressed co-parent with no spouse record of their own needs this
@@ -320,7 +358,7 @@ function descWidth(id){
 function placeAncestor(placed, edges, id, excludeSpouseId, xLeft, width, gen, extraPartnerId){
   const p = P(id);
   const parents = parentsOf(p);
-  const {expand, suppressed} = splitParents(parents);
+  const {expand, suppressed} = isAnchor(p) ? {expand:[], suppressed:null} : splitParents(parents);
   const parentPos = [];
   if(expand.length){
     // same reserved-extra-unit rule as ancWidth: only a suppressed
@@ -487,16 +525,18 @@ function bubbleHtml(n, x, y){
   const more = n.deadEnd && (parentsOf(p).length || childrenOf(p.id).length);
   const genderCls = p.gender==="m" ? " g-m" : p.gender==="f" ? " g-f" : "";
   return `<button class="node${n.dim?" dim":""}${n.id===focusId?" me":""}${more?" more":""}${genderCls}" style="left:${x}px;top:${y}px" data-go="${esc(n.id)}">
-    <span class="nm">${esc(p.name||"Unnamed")}</span>
+    <span class="nm">${esc(p.name||"Unnamed")}${isAnchor(p)?` <span class="anchorBadge" title="Anchor point">⚓</span>`:""}</span>
     ${p.maidenName?`<span class="maiden">née ${esc(p.maidenName)}</span>`:""}
     <span class="yrs${birthKnown(p)?"":" unk"}">${esc(birthLabel(p))}</span>
     ${n.half?`<span class="chip">half</span>`:""}
   </button>`;
 }
-function dockHtml(f){
+function dockHtml(f, otherAnchors){
   if(!f || f.placeholder) return "";
+  const hint = otherAnchors && otherAnchors.length
+    ? `<p class="anchorHint">Also connected through ${otherAnchors.map(id=>esc(P(id)?.name||"another line")).join(", ")} — tap a parent above to switch sides.</p>` : "";
   return `<div class="dock">
-    <div class="dockInfo"><strong>${esc(f.name||"Unnamed")}</strong>${f.maidenName?` <span class="maiden">née ${esc(f.maidenName)}</span>`:""}${years(f)?` <span class="yrs">${esc(years(f))}</span>`:""}${f.place?`<div class="place">${esc(f.place)}</div>`:""}</div>
+    <div class="dockInfo"><strong>${esc(f.name||"Unnamed")}</strong>${isAnchor(f)?` <span class="anchorBadge" title="Anchor point">⚓</span>`:""}${f.maidenName?` <span class="maiden">née ${esc(f.maidenName)}</span>`:""}${years(f)?` <span class="yrs">${esc(years(f))}</span>`:""}${f.place?`<div class="place">${esc(f.place)}</div>`:""}${hint}</div>
     <div class="dockBtns">
       ${(f.parents||[]).length<2?`<button class="dbtn" data-add="parent">+ Parent</button>`:""}
       <button class="dbtn" data-add="partner">+ Partner</button>
@@ -511,15 +551,21 @@ function renderPedigree(){
     return `<div class="empty"><h2>Start your tree</h2><p>Add yourself or the oldest relative you know. Then add their parents, partners and children from their card.</p><button class="primary" data-add="root">Add the first person</button></div>`;
   }
   pickFocus();
-  const f = P(focusId);
-  if(!f) return `<p class="hint">Nobody to show.</p>`;
+  // the grid is always laid out from the active anchor downward (so
+  // clicking around inside the same family line never moves anyone who
+  // was already on screen) - the clicked person (focusId) just gets the
+  // "me" highlight and drives the dock, wherever they land in that grid.
+  const rootId = (activeAnchor && P(activeAnchor)) ? activeAnchor : focusId;
+  const root = P(rootId);
+  if(!root) return `<p class="hint">Nobody to show.</p>`;
+  currentAnchor = activeAnchor;
 
   const placed = [], edges = [];
-  const focalPos = placeAncestor(placed, edges, f.id, null, 0, ancWidth(f.id, null), 0);
+  const focalPos = placeAncestor(placed, edges, root.id, null, 0, ancWidth(root.id, null), 0);
   const focalSpouseX = new Map();
-  partnersOf(f).forEach(sp=>{ const n = placed.find(x=>x.id===sp.id); if(n) focalSpouseX.set(sp.id, n.x); });
+  partnersOf(root).forEach(sp=>{ const n = placed.find(x=>x.id===sp.id); if(n) focalSpouseX.set(sp.id, n.x); });
 
-  const kids = childrenOf(f.id).sort(byBorn);
+  const kids = childrenOf(root.id).sort(byBorn);
   if(kids.length){
     const widths = kids.map(k=>descWidth(k.id));
     const totalW = widths.reduce((a,b)=>a+b,0);
@@ -545,10 +591,12 @@ function renderPedigree(){
   const linesHtml = renderEdges(edges, px, py);
   const nodesHtml = placed.map(n => bubbleHtml(n, px(n.x), py(n.gen))).join("");
 
+  const selected = P(focusId);
+  const otherAnchors = selected ? [...reachableAnchors(selected.id)].filter(a=>a!==activeAnchor) : [];
   return `<div class="pedigree" style="width:${width}px;height:${height}px">
     <svg class="lines" width="${width}" height="${height}">${linesHtml}</svg>
     ${nodesHtml}
-  </div>${dockHtml(f)}`;
+  </div>${dockHtml(selected, otherAnchors)}`;
 }
 
 function renderAll(){
@@ -568,7 +616,7 @@ function renderAll(){
 function card(p){
   const kids = childrenOf(p.id).length, y = years(p);
   const genderCls = p.gender==="m" ? " g-m" : p.gender==="f" ? " g-f" : "";
-  return `<button class="card${genderCls}" data-go="${esc(p.id)}"><span class="nm">${esc(p.name||"Unnamed")}</span>${p.maidenName?`<span class="maiden">née ${esc(p.maidenName)}</span>`:""}${y?`<span class="yrs">${esc(y)}</span>`:""}${kids?`<span class="meta"><span class="chip">${kids} ${kids===1?"child":"children"}</span></span>`:""}</button>`;
+  return `<button class="card${genderCls}" data-go="${esc(p.id)}"><span class="nm">${esc(p.name||"Unnamed")}${isAnchor(p)?` <span class="anchorBadge" title="Anchor point">⚓</span>`:""}</span>${p.maidenName?`<span class="maiden">née ${esc(p.maidenName)}</span>`:""}${y?`<span class="yrs">${esc(y)}</span>`:""}${kids?`<span class="meta"><span class="chip">${kids} ${kids===1?"child":"children"}</span></span>`:""}</button>`;
 }
 
 function render(){
@@ -598,9 +646,19 @@ function openSheet(mode){
   $("#delZone").hidden = true; $("#delConfirm").hidden = true; $("#delBtn").hidden = false;
   $("#otherWrap").hidden = true; $("#linkWrap").hidden = true; $("#pickWrap").hidden = true;
   $("#coParentWrap").hidden = true; editCoParents = [];
+  $("#anchorWrap").hidden = true;
   if(mode.edit){
     const p = P(mode.edit);
     $("#sheetTitle").textContent = p.placeholder ? "Who was this?" : "Edit details";
+    if(showAnchorMode && !p.placeholder){
+      $("#anchorWrap").hidden = false;
+      const isDefault = tree.defaultFocus === p.id;
+      $("#f-anchor").checked = isDefault || !!p.anchor;
+      $("#f-anchor").disabled = isDefault;
+      $("#anchorHintText").textContent = isDefault
+        ? "This is the tree's starting point, so it's always an anchor."
+        : "Ancestors stop expanding automatically once they reach an anchor — tap it to explore further back instead.";
+    }
     if(p.firstName || p.middleName || p.lastName){
       $("#f-first").value=p.firstName||""; $("#f-middle").value=p.middleName||""; $("#f-last").value=p.lastName||"";
     } else {
@@ -666,7 +724,8 @@ $("#sheetForm").addEventListener("submit", async e => {
     maidenName: gender==="f" ? $("#f-maiden").value.trim() : "",
     born: $("#f-born-y").value.trim(), bornMonth: $("#f-born-m").value, bornDay: $("#f-born-d").value.trim(),
     died: $("#f-died-y").value.trim(), diedMonth: $("#f-died-m").value, diedDay: $("#f-died-d").value.trim(),
-    place: $("#f-place").value.trim(), note: $("#f-note").value.trim()
+    place: $("#f-place").value.trim(), note: $("#f-note").value.trim(),
+    anchor: !$("#anchorWrap").hidden && $("#f-anchor").checked
   };
   if(!pickedId && !fields.name){ toast("Add a name first."); $("#f-first").focus(); return; }
   $("#saveBtn").disabled = true;
@@ -687,8 +746,9 @@ $("#sheetForm").addEventListener("submit", async e => {
       const person = pickedId ? {...P(pickedId)} : {id:newId(), ...fields, parents:[], spouses:[]};
       person.parents=[...(person.parents||[])]; person.spouses=[...(person.spouses||[])];
       if(rel==="root"){
-        await put(person); focusId=person.id;
+        await put(person);
         await setDefaultFocus(person.id);
+        setFocus(person.id);
       }
       else if(rel==="parent"){
         const other = parentsOf(f)[0];
@@ -740,7 +800,7 @@ $("#delYes").addEventListener("click", async () => {
   }
   await drop(id);
   trail = trail.filter(x=>x!==id);
-  focusId = next ? next.id : null;
+  if(next) setFocus(next.id); else { focusId = null; activeAnchor = null; }
   render(); toast("Removed.");
 });
 
@@ -754,7 +814,12 @@ $("#menuBtn").addEventListener("click", () => {
   $("#setDefaultBtn").hidden = !f || f.placeholder || tree.defaultFocus===f.id;
   $("#setDefaultBtn").textContent = f ? `Set ${f.name||"this person"} as everyone's starting point` : "Set as everyone's starting point";
   $("#colorGenderToggle").checked = app.classList.contains("color-gender");
+  $("#showAnchorToggle").checked = showAnchorMode;
   $("#menu").hidden = false;
+});
+$("#showAnchorToggle").addEventListener("change", e => {
+  showAnchorMode = e.target.checked;
+  keySet("ft-showanchor", e.target.checked ? "1" : "0");
 });
 $("#colorGenderToggle").addEventListener("change", e => {
   app.classList.toggle("color-gender", e.target.checked);
@@ -763,7 +828,7 @@ $("#colorGenderToggle").addEventListener("change", e => {
 $("#setDefaultBtn").addEventListener("click", async () => {
   const f = P(focusId); if(!f) return;
   const ok = await setDefaultFocus(f.id);
-  if(ok) toast(`${f.name||"This person"} is now everyone's starting point.`);
+  if(ok){ setFocus(f.id); render(); toast(`${f.name||"This person"} is now everyone's starting point.`); }
   $("#menu").hidden = true;
 });
 $("#copyBtn").addEventListener("click", async () => {

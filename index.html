@@ -126,6 +126,10 @@
       <p class="hint">Assumed to be a couple by default. Uncheck anyone that isn't.</p>
       <div id="coParentList"></div>
     </div>
+    <div id="anchorWrap" hidden>
+      <label class="check"><input type="checkbox" id="f-anchor"> Anchor point</label>
+      <p class="hint" id="anchorHintText">Ancestors stop expanding automatically once they reach an anchor — tap it to explore further back instead.</p>
+    </div>
     <div class="actions">
       <button type="button" class="ghost" data-close>Cancel</button>
       <button type="submit" class="primary" id="saveBtn">Save</button>
@@ -151,6 +155,7 @@
     <div class="menu-list">
       <button type="button" class="ghost" id="setDefaultBtn">Set as everyone's starting point</button>
       <label class="check"><input type="checkbox" id="colorGenderToggle"> Color cards red/blue by gender</label>
+      <label class="check"><input type="checkbox" id="showAnchorToggle"> Show anchor point controls</label>
       <button type="button" class="ghost" id="switchBtn">Switch to another tree</button>
       <button type="button" class="danger-link" id="forgetBtn">Remove this tree from this device</button>
     </div>

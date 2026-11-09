@@ -43,6 +43,7 @@ let tree = null;            // {key, name, defaultFocus}
 let unsub = null;
 let people = new Map(), focusId = null, trail = [], view = "tree", loaded = false, query = "", offlineNote = "";
 let sheetMode = null;
+let editCoParents = [];
 const app = $("#app");
 const P = id => people.get(id);
 
@@ -159,7 +160,8 @@ async function put(p){
     born: toYear(p.born), bornMonth: toSmall(p.bornMonth,12), bornDay: toSmall(p.bornDay,31),
     died: toYear(p.died), diedMonth: toSmall(p.diedMonth,12), diedDay: toSmall(p.diedDay,31),
     place: p.place||"", note: p.note||"",
-    parents: (p.parents||[]).slice(0,2), spouses: (p.spouses||[]).slice(0,20), updated: Date.now()
+    parents: (p.parents||[]).slice(0,2), spouses: (p.spouses||[]).slice(0,20),
+    notPartnerWith: (p.notPartnerWith||[]).slice(0,20), updated: Date.now()
   };
   if(p.placeholder && !data.name) data.placeholder = true;
   people.set(p.id, {id:p.id, ...data});
@@ -251,9 +253,9 @@ function placeAncestor(placed, edges, id, excludeSpouseId, xLeft, width, gen){
     // when both parents are each their own blood ancestor fork (both have
     // their own further ancestry, so neither is a plain dead-end spouse
     // attachment), they still need a tie line drawn here - sharing this
-    // child is what makes them a couple for this diagram, whether or not
-    // they were separately linked as partners.
-    if(parents.length===2){
+    // child assumes they're a couple for this diagram by default, unless
+    // explicitly marked otherwise (notPartnerWith, set from the Edit sheet).
+    if(parents.length===2 && !(parents[0].notPartnerWith||[]).includes(parents[1].id)){
       edges.push({tie:true, a:parentPos[0], b:parentPos[1]});
     }
   }
@@ -451,6 +453,7 @@ function openSheet(mode){
   form.reset(); form.classList.remove("picking");
   $("#delZone").hidden = true; $("#delConfirm").hidden = true; $("#delBtn").hidden = false;
   $("#otherWrap").hidden = true; $("#linkWrap").hidden = true; $("#pickWrap").hidden = true;
+  $("#coParentWrap").hidden = true; editCoParents = [];
   if(mode.edit){
     const p = P(mode.edit);
     $("#sheetTitle").textContent = p.placeholder ? "Who was this?" : "Edit details";
@@ -459,6 +462,14 @@ function openSheet(mode){
     $("#f-died-y").value=p.died??""; $("#f-died-m").value=p.diedMonth??""; $("#f-died-d").value=p.diedDay??"";
     $("#f-place").value=p.place||""; $("#f-note").value=p.note||"";
     $("#delZone").hidden = false;
+    const coParents = uniq(childrenOf(p.id).flatMap(k => (k.parents||[]).filter(id=>id!==p.id))).map(P).filter(Boolean);
+    if(coParents.length && !p.placeholder){
+      editCoParents = coParents.map(cp=>cp.id);
+      $("#coParentWrap").hidden = false;
+      $("#coParentList").innerHTML = coParents.map(cp =>
+        `<label class="check"><input type="checkbox" data-coparent="${esc(cp.id)}" ${(p.notPartnerWith||[]).includes(cp.id)?"":"checked"}> ${esc(cp.name||"Unnamed")}</label>`
+      ).join("");
+    }
   } else {
     const fname = f ? (f.name||"this person").split(/\s+/)[0] : "";
     $("#sheetTitle").textContent = relWords[mode.rel] + (f && mode.rel!=="root" ? ` for ${fname}` : "");
@@ -472,7 +483,9 @@ function openSheet(mode){
     }
     if(mode.rel==="child"){
       $("#otherWrap").hidden = false;
-      $("#f-other").innerHTML = partnersOf(f).map(p=>`<option value="${esc(p.id)}">${esc(p.name)}</option>`).join("") + `<option value="">Not listed / unknown</option>`;
+      const otherIds = uniq([...(f.spouses||[]), ...childrenOf(f.id).flatMap(k=>(k.parents||[]).filter(id=>id!==f.id))]);
+      const otherCandidates = otherIds.map(P).filter(Boolean);
+      $("#f-other").innerHTML = otherCandidates.map(p=>`<option value="${esc(p.id)}">${esc(p.name)}</option>`).join("") + `<option value="">Not listed / unknown</option>`;
     }
     if(mode.rel==="parent"){
       const existing = parentsOf(f)[0];
@@ -504,7 +517,15 @@ $("#sheetForm").addEventListener("submit", async e => {
   try {
     if(sheetMode.edit){
       const p = P(sheetMode.edit);
-      await put({...p, ...fields});
+      const partnered = new Set([...document.querySelectorAll('#coParentList input[data-coparent]:checked')].map(el=>el.dataset.coparent));
+      const notPartnerWith = editCoParents.filter(id=>!partnered.has(id));
+      await put({...p, ...fields, notPartnerWith});
+      for(const cpId of editCoParents){
+        const cp = P(cpId); if(!cp) continue;
+        const cur = new Set(cp.notPartnerWith||[]);
+        if(partnered.has(cpId)) cur.delete(p.id); else cur.add(p.id);
+        await put({...cp, notPartnerWith:[...cur]});
+      }
     } else {
       const rel = sheetMode.rel, f = P(focusId);
       const person = pickedId ? {...P(pickedId)} : {id:newId(), ...fields, parents:[], spouses:[]};

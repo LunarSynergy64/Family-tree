@@ -99,6 +99,11 @@
     <label id="otherWrap">Other parent <select id="f-other"></select></label>
     <label class="check" id="linkWrap"><input type="checkbox" id="f-link" checked> <span id="linkText"></span></label>
     <label class="newonly">Notes <textarea id="f-note" rows="3" maxlength="5000" placeholder="Nicknames, stories, maiden name…"></textarea></label>
+    <div id="coParentWrap" hidden>
+      <span class="fieldlabel">Shares a child with</span>
+      <p class="hint">Assumed to be a couple by default. Uncheck anyone that isn't.</p>
+      <div id="coParentList"></div>
+    </div>
     <div class="actions">
       <button type="button" class="ghost" data-close>Cancel</button>
       <button type="submit" class="primary" id="saveBtn">Save</button>

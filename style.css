@@ -59,7 +59,8 @@ main{max-width:1400px;margin:0 auto;padding:18px var(--gutter-r) calc(48px + env
 
 /* ---- pedigree grid: exact-coordinate generation rows ---- */
 #app{overflow:auto}
-.pedigree{position:relative;padding-bottom:170px;margin:0 auto}
+.pedigree{position:relative;padding-bottom:170px;margin:0 auto;cursor:grab}
+#app.panning,#app.panning .pedigree{cursor:grabbing;user-select:none}
 .pedigree .lines{position:absolute;left:0;top:0;pointer-events:none}
 .fam-line{stroke:var(--line);stroke-width:1.5}
 .tie-line{stroke:var(--line);stroke-width:1.5;stroke-dasharray:3 3}

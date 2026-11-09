@@ -274,7 +274,10 @@ function placeAncestor(placed, edges, id, excludeSpouseId, xLeft, width, gen){
 
     const myParents = person.parents||[];
     const connected = parentPos.filter((pp,i)=> myParents.includes(parents[i].id)).map(pp=>({x:pp.x, gen:pp.gen}));
-    if(connected.length) edges.push({childX:x, childGen:gen, parents:connected});
+    // these two parents are each their own independently-placed ancestor
+    // fork, so they may not sit next to each other - never collapse them
+    // to a single midpoint trunk (adjacent:false forces a stub per parent).
+    if(connected.length) edges.push({childX:x, childGen:gen, parents:connected, adjacent:false});
 
     partnersOf(person).filter(s=>!(f.isPivot && s.id===excludeSpouseId)).forEach(sp=>{
       const sx = cursor+0.5; cursor++;
@@ -308,7 +311,9 @@ function placeDescendant(placed, edges, id, xLeft, width, gen){
       const kp = P(k.id);
       const parentPts = [{x, gen}];
       (kp.parents||[]).forEach(pid=>{ if(spouseX.has(pid)) parentPts.push({x:spouseX.get(pid), gen}); });
-      edges.push({childX:kpos.x, childGen:kpos.gen, parents:parentPts});
+      // the pivot's own attached spouse always sits right next to them, so
+      // a single trunk from their shared midpoint always looks right here.
+      edges.push({childX:kpos.x, childGen:kpos.gen, parents:parentPts, adjacent:true});
       cx += widths[i];
     });
   }
@@ -327,17 +332,21 @@ function renderEdges(edges, px, py){
       return;
     }
     const key = e.parents.map(p=>p.x+","+p.gen).sort().join("|");
-    if(!groups.has(key)) groups.set(key, {parents:e.parents, children:[]});
+    if(!groups.has(key)) groups.set(key, {parents:e.parents, children:[], adjacent:e.adjacent});
     groups.get(key).children.push({x:e.childX, gen:e.childGen});
   });
   groups.forEach(g=>{
     const parentY = py(g.parents[0].gen);
-    // a stub from EACH parent's own position, not a single trunk from their
-    // midpoint - a parent sitting inside a cluttered sibling row can have
-    // their own x pulled visually close to someone else entirely, so the
-    // midpoint could land on the wrong person. One stub per parent avoids
-    // that ambiguity.
-    const parentPx = [...new Set(g.parents.map(p=>px(p.x)))];
+    // A couple that's always placed right next to each other (an attached
+    // spouse, or any case marked adjacent) reads better as one clean trunk
+    // from their shared midpoint. Two parents who are each their own
+    // independently-placed ancestor fork (adjacent:false) might not be
+    // anywhere near each other, so the midpoint could land on an unrelated
+    // person sitting between them - give those a stub per parent instead.
+    const uniqueXs = [...new Set(g.parents.map(p=>px(p.x)))];
+    const parentPx = (g.adjacent && uniqueXs.length>1)
+      ? [uniqueXs.reduce((a,b)=>a+b,0)/uniqueXs.length]
+      : uniqueXs;
     const childY = py(g.children[0].gen);
     const busY = parentY + (childY-parentY)*0.6;
     const childPx = g.children.map(c=>px(c.x));
@@ -400,7 +409,7 @@ function renderPedigree(){
       const kp = P(k.id);
       const parentPts = [{x:focalPos.x, gen:0}];
       (kp.parents||[]).forEach(pid=>{ if(focalSpouseX.has(pid)) parentPts.push({x:focalSpouseX.get(pid), gen:0}); });
-      edges.push({childX:kpos.x, childGen:kpos.gen, parents:parentPts});
+      edges.push({childX:kpos.x, childGen:kpos.gen, parents:parentPts, adjacent:true});
       cx += widths[i];
     });
   }
@@ -624,8 +633,34 @@ $("#forgetBtn").addEventListener("click", e => {
   forgetTree(tree.key); $("#menu").hidden = true; showHome();
 });
 
+/* ================= pan the grid by dragging the background =================
+   Plain mouse events rather than Pointer Events - touch users already get
+   native scrolling from #app's overflow, this is specifically for desktop
+   mice where the scrollbar can be easy to miss. */
+let panState = null, dragged = false;
+function onPanMove(e){
+  if(!panState) return;
+  const dx = e.clientX-panState.x, dy = e.clientY-panState.y;
+  if(!dragged && (Math.abs(dx)>4 || Math.abs(dy)>4)){ dragged = true; app.classList.add("panning"); }
+  if(dragged){ app.scrollLeft = panState.left - dx; app.scrollTop = panState.top - dy; }
+}
+function onPanEnd(){
+  panState = null; app.classList.remove("panning");
+  document.removeEventListener("mousemove", onPanMove);
+  document.removeEventListener("mouseup", onPanEnd);
+}
+app.addEventListener("mousedown", e => {
+  if(view!=="tree" || e.button!==0) return;
+  if(e.target.closest(".node") || e.target.closest(".dock")) return;
+  panState = {x:e.clientX, y:e.clientY, left:app.scrollLeft, top:app.scrollTop};
+  dragged = false;
+  document.addEventListener("mousemove", onPanMove);
+  document.addEventListener("mouseup", onPanEnd);
+});
+
 /* ================= events ================= */
 document.addEventListener("click", e => {
+  if(dragged){ dragged = false; e.stopPropagation(); e.preventDefault(); return; }
   const g = e.target.closest("[data-go]");
   if(g){
     const id = g.dataset.go, p = P(id);

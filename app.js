@@ -461,7 +461,11 @@ function placeDescendant(placed, edges, id, xLeft, width, gen){
   if(kids.length){
     const widths = kids.map(k=>descWidth(k.id));
     const totalW = widths.reduce((a,b)=>a+b,0);
-    let cx = x - totalW/2;
+    // center the children block on the full allocated width, not on the
+    // pivot's own position - when the pivot has a spouse, their own x sits
+    // left of that width's true center, which would shove a wide block of
+    // grandchildren left too, overlapping whatever's allocated next door.
+    let cx = (xLeft + width/2) - totalW/2;
     kids.forEach((k,i)=>{
       const kpos = placeDescendant(placed, edges, k.id, cx, widths[i], gen+1);
       const kp = P(k.id);
@@ -542,6 +546,7 @@ function dockHtml(f, otherAnchors){
       <button class="dbtn" data-add="partner">+ Partner</button>
       <button class="dbtn" data-add="child">+ Child</button>
       <button class="dbtn" data-add="sibling">+ Sibling</button>
+      ${showAnchorMode?`<button class="dbtn" data-options="${esc(f.id)}">⋯</button>`:""}
       <button class="dbtn edit" data-edit="${esc(f.id)}">Edit</button>
     </div>
   </div>`;
@@ -569,7 +574,11 @@ function renderPedigree(){
   if(kids.length){
     const widths = kids.map(k=>descWidth(k.id));
     const totalW = widths.reduce((a,b)=>a+b,0);
-    let cx = focalPos.x - totalW/2;
+    // center on the root+spouse couple's own midpoint, same as inside
+    // placeDescendant, so a spouse doesn't pull the whole fan off-center.
+    const spouseXs = [...focalSpouseX.values()];
+    const coupleCenter = spouseXs.length ? [focalPos.x, ...spouseXs].reduce((a,b)=>a+b,0)/(spouseXs.length+1) : focalPos.x;
+    let cx = coupleCenter - totalW/2;
     kids.forEach((k,i)=>{
       const kpos = placeDescendant(placed, edges, k.id, cx, widths[i], 1);
       const kp = P(k.id);
@@ -646,19 +655,9 @@ function openSheet(mode){
   $("#delZone").hidden = true; $("#delConfirm").hidden = true; $("#delBtn").hidden = false;
   $("#otherWrap").hidden = true; $("#linkWrap").hidden = true; $("#pickWrap").hidden = true;
   $("#coParentWrap").hidden = true; editCoParents = [];
-  $("#anchorWrap").hidden = true;
   if(mode.edit){
     const p = P(mode.edit);
     $("#sheetTitle").textContent = p.placeholder ? "Who was this?" : "Edit details";
-    if(showAnchorMode && !p.placeholder){
-      $("#anchorWrap").hidden = false;
-      const isDefault = tree.defaultFocus === p.id;
-      $("#f-anchor").checked = isDefault || !!p.anchor;
-      $("#f-anchor").disabled = isDefault;
-      $("#anchorHintText").textContent = isDefault
-        ? "This is the tree's starting point, so it's always an anchor."
-        : "Ancestors stop expanding automatically once they reach an anchor — tap it to explore further back instead.";
-    }
     if(p.firstName || p.middleName || p.lastName){
       $("#f-first").value=p.firstName||""; $("#f-middle").value=p.middleName||""; $("#f-last").value=p.lastName||"";
     } else {
@@ -709,6 +708,28 @@ function openSheet(mode){
 }
 function closeSheet(){ $("#sheet").hidden = true; sheetMode = null; }
 
+let optionsPersonId = null;
+function openPersonOptions(id){
+  const p = P(id); if(!p) return;
+  optionsPersonId = id;
+  $("#personOptionsTitle").textContent = `Options for ${p.name||"this person"}`;
+  const isDefault = tree.defaultFocus === p.id;
+  $("#optAnchor").checked = isDefault || !!p.anchor;
+  $("#optAnchor").disabled = isDefault;
+  $("#optAnchorHint").textContent = isDefault
+    ? "This is the tree's starting point, so it's always an anchor."
+    : "Ancestors stop expanding automatically once they reach an anchor — tap it to explore further back instead.";
+  $("#personOptions").hidden = false;
+}
+$("#optAnchor").addEventListener("change", async e => {
+  const p = P(optionsPersonId); if(!p) return;
+  const ok = await put({...p, anchor: e.target.checked});
+  if(ok){
+    toast(e.target.checked ? `${p.name||"This person"} is now an anchor point.` : `${p.name||"This person"} is no longer an anchor point.`);
+    setFocus(focusId); render();
+  }
+});
+
 $("#f-existing").addEventListener("change", e => $("#sheetForm").classList.toggle("picking", !!e.target.value));
 $$("#genderToggle button").forEach(b => b.addEventListener("click", () => setGender(b.dataset.gender)));
 
@@ -724,8 +745,7 @@ $("#sheetForm").addEventListener("submit", async e => {
     maidenName: gender==="f" ? $("#f-maiden").value.trim() : "",
     born: $("#f-born-y").value.trim(), bornMonth: $("#f-born-m").value, bornDay: $("#f-born-d").value.trim(),
     died: $("#f-died-y").value.trim(), diedMonth: $("#f-died-m").value, diedDay: $("#f-died-d").value.trim(),
-    place: $("#f-place").value.trim(), note: $("#f-note").value.trim(),
-    anchor: !$("#anchorWrap").hidden && $("#f-anchor").checked
+    place: $("#f-place").value.trim(), note: $("#f-note").value.trim()
   };
   if(!pickedId && !fields.name){ toast("Add a name first."); $("#f-first").focus(); return; }
   $("#saveBtn").disabled = true;
@@ -880,8 +900,10 @@ document.addEventListener("click", e => {
   }
   const a = e.target.closest("[data-add]"); if(a) return openSheet({rel:a.dataset.add});
   const ed = e.target.closest("[data-edit]"); if(ed) return openSheet({edit:ed.dataset.edit});
+  const op = e.target.closest("[data-options]"); if(op) return openPersonOptions(op.dataset.options);
   if(e.target.closest("[data-close]")) return closeSheet();
   if(e.target.closest("[data-closemenu]")) $("#menu").hidden = true;
+  if(e.target.closest("[data-closeoptions]")) $("#personOptions").hidden = true;
 });
 document.addEventListener("keydown", e => { if(e.key==="Escape"){ closeSheet(); $("#menu").hidden = true; } });
 app.addEventListener("input", e => { if(e.target.id==="q"){ query=e.target.value; render(); } });

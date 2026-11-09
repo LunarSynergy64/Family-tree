@@ -126,10 +126,6 @@
       <p class="hint">Assumed to be a couple by default. Uncheck anyone that isn't.</p>
       <div id="coParentList"></div>
     </div>
-    <div id="anchorWrap" hidden>
-      <label class="check"><input type="checkbox" id="f-anchor"> Anchor point</label>
-      <p class="hint" id="anchorHintText">Ancestors stop expanding automatically once they reach an anchor — tap it to explore further back instead.</p>
-    </div>
     <div class="actions">
       <button type="button" class="ghost" data-close>Cancel</button>
       <button type="submit" class="primary" id="saveBtn">Save</button>
@@ -142,6 +138,17 @@
       </div>
     </div>
   </form>
+</div>
+
+<!-- ============ SHEET: per-person options ============ -->
+<div class="sheet" id="personOptions" hidden>
+  <div class="scrim" data-closeoptions></div>
+  <div class="panel">
+    <h3 id="personOptionsTitle">Options</h3>
+    <label class="check"><input type="checkbox" id="optAnchor"> Anchor point</label>
+    <p class="hint" id="optAnchorHint">Ancestors stop expanding automatically once they reach an anchor — tap it to explore further back instead.</p>
+    <div class="actions"><button type="button" class="ghost" data-closeoptions>Close</button></div>
+  </div>
 </div>
 
 <!-- ============ SHEET: tree options ============ -->

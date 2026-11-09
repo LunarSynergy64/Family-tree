@@ -332,13 +332,20 @@ function renderEdges(edges, px, py){
   });
   groups.forEach(g=>{
     const parentY = py(g.parents[0].gen);
-    const uniqueXs = [...new Set(g.parents.map(p=>p.x))];
-    const anchorX = px(uniqueXs.reduce((a,b)=>a+b,0)/uniqueXs.length);
+    // a stub from EACH parent's own position, not a single trunk from their
+    // midpoint - a parent sitting inside a cluttered sibling row can have
+    // their own x pulled visually close to someone else entirely, so the
+    // midpoint could land on the wrong person. One stub per parent avoids
+    // that ambiguity.
+    const parentPx = [...new Set(g.parents.map(p=>px(p.x)))];
     const childY = py(g.children[0].gen);
     const busY = parentY + (childY-parentY)*0.6;
     const childPx = g.children.map(c=>px(c.x));
-    const minX = Math.min(anchorX, ...childPx), maxX = Math.max(anchorX, ...childPx);
-    svg += `<line x1="${anchorX.toFixed(1)}" y1="${parentY.toFixed(1)}" x2="${anchorX.toFixed(1)}" y2="${busY.toFixed(1)}" class="fam-line"/>`;
+    const allX = [...parentPx, ...childPx];
+    const minX = Math.min(...allX), maxX = Math.max(...allX);
+    parentPx.forEach(x1 => {
+      svg += `<line x1="${x1.toFixed(1)}" y1="${parentY.toFixed(1)}" x2="${x1.toFixed(1)}" y2="${busY.toFixed(1)}" class="fam-line"/>`;
+    });
     if(maxX>minX) svg += `<line x1="${minX.toFixed(1)}" y1="${busY.toFixed(1)}" x2="${maxX.toFixed(1)}" y2="${busY.toFixed(1)}" class="fam-line"/>`;
     g.children.forEach((c,i)=>{
       svg += `<line x1="${childPx[i].toFixed(1)}" y1="${busY.toFixed(1)}" x2="${childPx[i].toFixed(1)}" y2="${py(c.gen).toFixed(1)}" class="fam-line"/>`;

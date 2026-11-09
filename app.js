@@ -221,13 +221,52 @@ function go(id, push=true){
    so the "whose parents are whose" is never ambiguous. */
 const SLOT_W = 124, ROW_H = 148;
 
+/* A real family tree branches both ways going up, and fully expanding both
+   parents at every single generation doubles the width each time - by a
+   few generations it's an unreadable wall. Once the tree has a shared
+   starting point, only the parent whose own ancestry actually leads back
+   to it keeps expanding by default; the other parent (and their whole
+   side) becomes a tap-to-explore dead end, exactly like a spouse. Tapping
+   them re-centers the grid there, and from that new vantage neither of
+   their own parents leads back to the old anchor, so both expand normally
+   - "give me an option to see it from her side" instead of both sides
+   fighting for space at once. */
+function leadsToDefault(id, visited){
+  if(!id || !tree.defaultFocus) return false;
+  visited = visited || new Set();
+  if(visited.has(id)) return false;
+  visited.add(id);
+  if(id === tree.defaultFocus) return true;
+  const p = P(id); if(!p) return false;
+  return (p.parents||[]).some(pid => leadsToDefault(pid, visited));
+}
+function splitParents(parents){
+  if(parents.length===2 && tree.defaultFocus){
+    // once one of the two parents IS the shared starting point itself,
+    // the search is over - expand both normally, so defaultFocus's own
+    // spouse is just their spouse (via the usual attachment below), not
+    // a second, duplicate "suppressed" placement of the same person.
+    if(parents[0].id===tree.defaultFocus || parents[1].id===tree.defaultFocus){
+      return {expand:parents, suppressed:null};
+    }
+    const leads = parents.map(par=>leadsToDefault(par.id));
+    if(leads[0] !== leads[1]){
+      const idx = leads[0] ? 0 : 1;
+      return {expand:[parents[idx]], suppressed:parents[1-idx]};
+    }
+  }
+  return {expand:parents, suppressed:null};
+}
+
 function ancWidth(id, excludeSpouseId){
   const p = P(id);
   const sibs = siblingsOf(p).map(s=>s.p);
   const folks = [p, ...sibs];
   const rowWidth = folks.reduce((sum,f)=> sum + 1 + partnersOf(f).filter(s=>!(f.id===p.id && s.id===excludeSpouseId)).length, 0);
-  const parents = parentsOf(p);
-  const upWidth = parents.length ? parents.reduce((sum,par,i)=>sum+ancWidth(par.id, parents.length>1?parents[1-i].id:null),0) : 0;
+  const {expand, suppressed} = splitParents(parentsOf(p));
+  const upWidth = expand.length
+    ? expand.reduce((sum,par,i)=>sum+ancWidth(par.id, expand.length>1?expand[1-i].id:null),0) + (suppressed?1:0)
+    : 0;
   return Math.max(rowWidth, upWidth, 1);
 }
 function descWidth(id){
@@ -241,13 +280,18 @@ function descWidth(id){
 function placeAncestor(placed, edges, id, excludeSpouseId, xLeft, width, gen){
   const p = P(id);
   const parents = parentsOf(p);
+  const {expand, suppressed} = splitParents(parents);
+  // when there's exactly one expanding parent and one suppressed, the
+  // expanding parent's own row must not ALSO auto-attach the suppressed
+  // one as a plain dead-end spouse - we're placing them ourselves below.
+  const excludeFor = i => expand.length>1 ? expand[1-i].id : (suppressed ? suppressed.id : null);
   const parentPos = [];
-  if(parents.length){
-    const widths = parents.map((par,i)=>ancWidth(par.id, parents.length>1?parents[1-i].id:null));
-    const totalW = widths.reduce((a,b)=>a+b,0);
+  if(expand.length){
+    const widths = expand.map((par,i)=>ancWidth(par.id, excludeFor(i)));
+    const totalW = widths.reduce((a,b)=>a+b,0) + (suppressed?1:0);
     let px = xLeft + (width-totalW)/2;
-    parents.forEach((par,i)=>{
-      parentPos.push(placeAncestor(placed, edges, par.id, parents.length>1?parents[1-i].id:null, px, widths[i], gen-1));
+    expand.forEach((par,i)=>{
+      parentPos.push(placeAncestor(placed, edges, par.id, excludeFor(i), px, widths[i], gen-1));
       px += widths[i];
     });
     // when both parents are each their own blood ancestor fork (both have
@@ -255,8 +299,16 @@ function placeAncestor(placed, edges, id, excludeSpouseId, xLeft, width, gen){
     // attachment), they still need a tie line drawn here - sharing this
     // child assumes they're a couple for this diagram by default, unless
     // explicitly marked otherwise (notPartnerWith, set from the Edit sheet).
-    if(parents.length===2 && !(parents[0].notPartnerWith||[]).includes(parents[1].id)){
+    if(expand.length===2 && !(expand[0].notPartnerWith||[]).includes(expand[1].id)){
       edges.push({tie:true, a:parentPos[0], b:parentPos[1]});
+    }
+    if(suppressed){
+      // the side that doesn't lead back to the tree's shared starting
+      // point - shown tied to the expanding parent, but never expanded.
+      const anchor = parentPos[0];
+      const sx = px + 0.5;
+      placed.push({id:suppressed.id, x:sx, gen:anchor.gen, dim:true, placeholder:!!suppressed.placeholder, deadEnd:true});
+      edges.push({tie:true, a:{x:anchor.x, gen:anchor.gen}, b:{x:sx, gen:anchor.gen}});
     }
   }
   const sibs = siblingsOf(p);
@@ -286,7 +338,7 @@ function placeAncestor(placed, edges, id, excludeSpouseId, xLeft, width, gen){
     if(f.isPivot) pivotPos = {x, gen};
 
     const myParents = person.parents||[];
-    const connected = parentPos.filter((pp,i)=> myParents.includes(parents[i].id)).map(pp=>({x:pp.x, gen:pp.gen}));
+    const connected = parentPos.filter((pp,i)=> myParents.includes(expand[i].id)).map(pp=>({x:pp.x, gen:pp.gen}));
     // these two parents are each their own independently-placed ancestor
     // fork, so they may not sit next to each other - never collapse them
     // to a single midpoint trunk (adjacent:false forces a stub per parent).

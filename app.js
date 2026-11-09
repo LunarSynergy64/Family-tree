@@ -23,8 +23,15 @@ function formatDate(y,m,d){
   if(m) return d ? `${d} ${MONTHS[m-1]} ${y}` : `${MONTHS[m-1]} ${y}`;
   return `${y}`;
 }
-const birthKnown = p => p.born!=null && p.born!=="";
-function birthLabel(p){ return formatDate(p.born,p.bornMonth,p.bornDay) || "Unknown date of Birth"; }
+// Once someone has died, a quick birth-death YEAR range reads better than
+// a full birthday - shown even when full day/month is on record for
+// either end, with "?" standing in for a birth year nobody's entered yet.
+function deathCompact(p){
+  if(p.died==null || p.died==="") return null;
+  return `${(p.born!=null && p.born!=="") ? p.born : "?"} – ${p.died}`;
+}
+const birthKnown = p => (p.born!=null && p.born!=="") || (p.died!=null && p.died!=="");
+function birthLabel(p){ return deathCompact(p) || formatDate(p.born,p.bornMonth,p.bornDay) || "Unknown date of Birth"; }
 function toast(msg){ const t=$("#toast"); t.textContent=msg; t.hidden=false; clearTimeout(toast.t); toast.t=setTimeout(()=>t.hidden=true,3500); }
 
 const fullName = (first, middle, last) => [first, middle, last].map(s=>(s||"").trim()).filter(Boolean).join(" ");
@@ -185,11 +192,10 @@ function siblingsOf(p){
     .map(s => ({p:s, half: !(mine.length===(s.parents||[]).length && mine.every(x=>s.parents.includes(x)))}));
 }
 function years(p){
-  const b = formatDate(p.born,p.bornMonth,p.bornDay), d = formatDate(p.died,p.diedMonth,p.diedDay);
-  if(b && d) return `${b} – ${d}`;
-  if(b) return `b. ${b}`;
-  if(d) return `d. ${d}`;
-  return "";
+  const compact = deathCompact(p);
+  if(compact) return compact;
+  const b = formatDate(p.born,p.bornMonth,p.bornDay);
+  return b ? `b. ${b}` : "";
 }
 function surname(p){
   if(p.lastName) return p.lastName;

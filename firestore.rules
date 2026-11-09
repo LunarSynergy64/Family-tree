@@ -13,7 +13,13 @@ service cloud.firestore {
         && request.resource.data.keys().hasOnly(['name', 'created'])
         && request.resource.data.name is string
         && request.resource.data.name.size() <= 80;
-      allow update, delete: if false;
+      // The only thing anyone can ever change on an existing tree is which
+      // person the tree opens to by default (name/created are permanent).
+      allow update: if validId(treeId)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['defaultFocus'])
+        && request.resource.data.defaultFocus is string
+        && request.resource.data.defaultFocus.size() <= 60;
+      allow delete: if false;
 
       match /people/{personId} {
         allow read: if treeExists(treeId);
@@ -29,9 +35,10 @@ service cloud.firestore {
       return validId(id) && exists(/databases/$(database)/documents/trees/$(id));
     }
     function validPerson(p) {
-      return p.keys().hasOnly(['name', 'born', 'died', 'place', 'note', 'parents', 'spouses', 'updated'])
+      return p.keys().hasOnly(['name', 'born', 'died', 'place', 'note', 'parents', 'spouses', 'updated', 'placeholder'])
         && p.name is string && p.name.size() <= 200
         && (!('note' in p) || (p.note is string && p.note.size() <= 5000))
+        && (!('placeholder' in p) || p.placeholder is bool)
         && p.parents is list && p.parents.size() <= 2
         && p.spouses is list && p.spouses.size() <= 20;
     }

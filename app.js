@@ -14,6 +14,7 @@ const keySet = (k,v) => { try { localStorage.setItem(k,v); } catch(e) {} };
 const newId = () => "p" + Date.now().toString(36) + Math.random().toString(36).slice(2,8);
 const uniq = a => [...new Set(a)];
 const byName = (a,b) => (a.name||"").localeCompare(b.name||"");
+const byBorn = (a,b) => String(a.born||"").localeCompare(String(b.born||"")) || byName(a,b);
 function toast(msg){ const t=$("#toast"); t.textContent=msg; t.hidden=false; clearTimeout(toast.t); toast.t=setTimeout(()=>t.hidden=true,3500); }
 
 async function treeKey(name, pass){
@@ -29,7 +30,7 @@ function saveTree(key, name){ const list = savedTrees().filter(t=>t.key!==key); 
 function forgetTree(key){ keySet("ft-trees", JSON.stringify(savedTrees().filter(t=>t.key!==key))); }
 
 /* ================= screens ================= */
-let tree = null;            // {key, name}
+let tree = null;            // {key, name, defaultFocus}
 let unsub = null;
 let people = new Map(), focusId = null, trail = [], view = "tree", loaded = false, query = "", offlineNote = "";
 let sheetMode = null;
@@ -52,12 +53,13 @@ async function openTree(key, nameHint){
   try { snap = await getDoc(doc(fs, "trees", key)); }
   catch(e){ toast("Couldn't reach the family tree server. Check your connection."); return false; }
   if(!snap.exists()) return false;
-  const name = snap.data().name || nameHint || "Family Tree";
-  tree = {key, name}; saveTree(key, name);
+  const data = snap.data();
+  const name = data.name || nameHint || "Family Tree";
+  tree = {key, name, defaultFocus: data.defaultFocus || null}; saveTree(key, name);
   history.replaceState(null, "", location.pathname + "#t=" + key);
   $("#home").hidden = true; $("#treeScreen").hidden = false;
   $("#treeTitle").textContent = name; document.title = name;
-  loaded = false; offlineNote = ""; view = "tree"; trail = []; focusId = keyGet("ft-focus-"+key);
+  loaded = false; offlineNote = ""; view = "tree"; trail = []; focusId = null;
   render();
   const timer = setTimeout(()=>{ if(!loaded){ offlineNote="Still loading. If this stays, check your connection."; render(); } }, 10000);
   unsub = onSnapshot(collection(fs, "trees", key, "people"), qs => {
@@ -144,6 +146,7 @@ async function put(p){
     name: p.name||"", born: p.born||"", died: p.died||"", place: p.place||"", note: p.note||"",
     parents: (p.parents||[]).slice(0,2), spouses: (p.spouses||[]).slice(0,20), updated: Date.now()
   };
+  if(p.placeholder && !data.name) data.placeholder = true;
   people.set(p.id, {id:p.id, ...data});
   try { await setDoc(doc(fs, "trees", tree.key, "people", p.id), data); return true; }
   catch(e){ toast("That change didn't save (" + (e.code||"error") + "). Try again."); return false; }
@@ -153,57 +156,115 @@ async function drop(id){
   try { await deleteDoc(doc(fs, "trees", tree.key, "people", id)); }
   catch(e){ toast("Couldn't remove (" + (e.code||"error") + ")."); }
 }
+/* a shared placeholder parent lets two people be linked as siblings even when
+   nobody knows who their actual parents were. Editing it in later replaces the
+   "Unknown" bubble with a real person without having to relink anyone. */
+async function ensureParentPlaceholder(id){
+  const p = P(id);
+  if(p.parents && p.parents.length) return p.parents[0];
+  const ph = {id:newId(), name:"", born:"", died:"", place:"", note:"", parents:[], spouses:[], placeholder:true};
+  await put(ph);
+  await put({...p, parents:[ph.id]});
+  return ph.id;
+}
+async function setDefaultFocus(id){
+  try {
+    await setDoc(doc(fs, "trees", tree.key), {defaultFocus: id}, {merge:true});
+    tree.defaultFocus = id;
+    return true;
+  } catch(e){ toast("Couldn't set the starting point (" + (e.code||"error") + ")."); return false; }
+}
 
-/* ================= tree rendering ================= */
+/* ================= pedigree grid rendering =================
+   One person is the focal point. Going UP from them is a full binary
+   ancestor fan (both parents, each generation also showing that
+   ancestor's own siblings). Going DOWN from them is every descendant,
+   generation by generation. A spouse married in at any level, and a
+   sibling's own line, are shown as a single dim "more" bubble — their
+   own parents/children aren't expanded unless you tap them, which
+   re-centres the whole grid on them. */
+function pickFocus(){
+  if(focusId && P(focusId)) return;
+  if(tree.defaultFocus && P(tree.defaultFocus)){ focusId = tree.defaultFocus; return; }
+  const all = [...people.values()].filter(p=>!p.placeholder).sort(byName);
+  focusId = all.length ? all[0].id : null;
+}
 function go(id, push=true){
   if(!P(id)) return;
   if(push && focusId && focusId!==id) trail.push(focusId);
-  focusId=id; keySet("ft-focus-"+tree.key, id); view="tree"; render(); window.scrollTo({top:0});
+  focusId=id; view="tree"; render(); window.scrollTo({top:0});
 }
-function pickFocus(){
-  if(focusId && P(focusId)) return;
-  const all=[...people.values()].sort(byName);
-  focusId = all.length ? all[0].id : null;
-}
-function card(p, extra=""){
-  const kids = childrenOf(p.id).length, y = years(p);
-  return `<button class="card" data-go="${esc(p.id)}"><span class="nm">${esc(p.name||"Unnamed")}</span>${y?`<span class="yrs">${esc(y)}</span>`:""}${(extra||kids)?`<span class="meta">${extra}${kids?`<span class="chip">${kids} ${kids===1?"child":"children"}</span>`:""}</span>`:""}</button>`;
-}
-const addBtn = (rel, label) => `<button class="add" data-add="${rel}">+ ${label}</button>`;
 
-function renderTree(){
+function personBubble(p, opts={}){
+  if(p.placeholder) return `<button class="node ph" data-go="${esc(p.id)}">Unknown</button>`;
+  const isFocal = p.id===focusId;
+  const more = opts.dim && (parentsOf(p).length || childrenOf(p.id).length);
+  return `<button class="node${opts.dim?" dim":""}${isFocal?" me":""}${more?" more":""}" data-go="${esc(p.id)}">
+    <span class="nm">${esc(p.name||"Unnamed")}</span>
+    ${years(p)?`<span class="yrs">${esc(years(p))}</span>`:""}
+    ${opts.half?`<span class="chip">half</span>`:""}
+  </button>`;
+}
+function unit(p, opts={}){
+  const spouses = partnersOf(p).filter(s=>s.id!==opts.excludeSpouseId);
+  let h = personBubble(p, {half:opts.half});
+  spouses.forEach(s => { h += `<span class="tie"></span>` + personBubble(s, {dim:true}); });
+  return `<div class="couple">${h}</div>`;
+}
+function ancestorFan(id, excludeSpouseId, depth=0){
+  const p = P(id); if(!p || depth>12) return "";
+  const sibs = siblingsOf(p);
+  const rowFolks = [{p, half:false}, ...sibs].sort((a,b)=>byBorn(a.p,b.p));
+  const rowHtml = rowFolks.map(({p:person, half}) =>
+    unit(person, {excludeSpouseId: person.id===p.id ? excludeSpouseId : null, half})
+  ).join("");
+  const parents = parentsOf(p);
+  let upHtml = "";
+  if(parents.length){
+    const cols = parents.map((par,i) => ancestorFan(par.id, parents.length>1 ? parents[1-i].id : null, depth+1)).join("");
+    upHtml = `<div class="anc-up">${cols}</div><div class="stem"></div>`;
+  }
+  return `<div class="anc-col">${upHtml}<div class="anc-row">${rowHtml}</div></div>`;
+}
+function descendantTree(id, depth=0){
+  const p = P(id); if(!p || depth>20) return "";
+  const kids = childrenOf(id).sort(byBorn);
+  let downHtml = "";
+  if(kids.length){
+    const cols = kids.map(k => descendantTree(k.id, depth+1)).join("");
+    downHtml = `<div class="stem"></div><div class="desc-down">${cols}</div>`;
+  }
+  return `<div class="desc-col"><div class="desc-row">${unit(p)}</div>${downHtml}</div>`;
+}
+function dockHtml(f){
+  if(!f || f.placeholder) return "";
+  return `<div class="dock">
+    <div class="dockInfo"><strong>${esc(f.name||"Unnamed")}</strong>${years(f)?` <span class="yrs">${esc(years(f))}</span>`:""}${f.place?`<div class="place">${esc(f.place)}</div>`:""}</div>
+    <div class="dockBtns">
+      ${(f.parents||[]).length<2?`<button class="dbtn" data-add="parent">+ Parent</button>`:""}
+      <button class="dbtn" data-add="partner">+ Partner</button>
+      <button class="dbtn" data-add="child">+ Child</button>
+      <button class="dbtn" data-add="sibling">+ Sibling</button>
+      <button class="dbtn edit" data-edit="${esc(f.id)}">Edit</button>
+    </div>
+  </div>`;
+}
+function renderPedigree(){
   if(!people.size){
     return `<div class="empty"><h2>Start your tree</h2><p>Add yourself or the oldest relative you know. Then add their parents, partners and children from their card.</p><button class="primary" data-add="root">Add the first person</button></div>`;
   }
   pickFocus();
   const f = P(focusId);
-  const par = parentsOf(f), prt = partnersOf(f), sibs = siblingsOf(f);
-  const kids = childrenOf(f.id).sort((a,b)=>String(a.born||"").localeCompare(String(b.born||"")));
-  const coParents = new Set(kids.flatMap(k=>k.parents.filter(x=>x!==f.id)));
-  const showWith = coParents.size>1;
-  let h = "";
-  h += `<section class="gen"><h2>Parents</h2><div class="row">${par.map(p=>card(p)).join("")}${par.length<2?addBtn("parent","Add parent"):""}</div></section>`;
-  h += `<div class="stem"></div>`;
-  h += `<section class="focus" aria-label="Selected person"><span class="nm">${esc(f.name||"Unnamed")}</span>`;
-  if(years(f)) h += `<span class="yrs">${esc(years(f))}</span>`;
-  if(f.place) h += `<p class="place">${esc(f.place)}</p>`;
-  if(f.note) h += `<p class="story">${esc(f.note)}</p>`;
-  h += `<div class="tools"><button class="btn" data-edit="${esc(f.id)}">Edit details</button></div></section>`;
-  h += `<section class="gen partners"><h2>${prt.length>1?"Partners":"Partner"}</h2><div class="row">${prt.map(p=>card(p)).join("")}${addBtn("partner","Add partner")}</div></section>`;
-  h += `<div class="stem"></div>`;
-  h += `<section class="gen"><h2>Children ${kids.length?`<span>· ${kids.length}</span>`:""}</h2><div class="row">${kids.map(k=>{
-      const other = showWith ? k.parents.filter(x=>x!==f.id).map(P).filter(Boolean)[0] : null;
-      return card(k, other?`<span class="chip">with ${esc((other.name||"").split(/\s+/)[0])}</span>`:"");
-    }).join("")}${addBtn("child","Add child")}</div></section>`;
-  h += `<section class="gen sib"><h2>Brothers &amp; sisters ${sibs.length?`<span>· ${sibs.length}</span>`:""}</h2>`;
-  if(par.length) h += `<div class="row">${sibs.map(s=>card(s.p, s.half?`<span class="chip">half</span>`:"")).join("")}${addBtn("sibling","Add sibling")}</div>`;
-  else h += `<p class="hint">Add a parent first, then siblings can hang off the same parents.</p>`;
-  return h + `</section>`;
+  if(!f) return `<p class="hint">Nobody to show.</p>`;
+  const kids = childrenOf(f.id).sort(byBorn);
+  const descHtml = kids.length ? `<div class="stem"></div><div class="desc-down">${kids.map(k=>descendantTree(k.id)).join("")}</div>` : "";
+  const fanHtml = ancestorFan(f.id, null);
+  return `<div class="pedigree">${fanHtml}${descHtml}</div>${dockHtml(f)}`;
 }
 
 function renderAll(){
   const q = query.trim().toLowerCase();
-  const list = [...people.values()].filter(p => !q || (p.name||"").toLowerCase().includes(q) || (p.place||"").toLowerCase().includes(q));
+  const list = [...people.values()].filter(p => !p.placeholder && (!q || (p.name||"").toLowerCase().includes(q) || (p.place||"").toLowerCase().includes(q)));
   const groups = {};
   list.forEach(p => (groups[surname(p)] ||= []).push(p));
   const names = Object.keys(groups).sort();
@@ -215,6 +276,10 @@ function renderAll(){
   });
   return h;
 }
+function card(p){
+  const kids = childrenOf(p.id).length, y = years(p);
+  return `<button class="card" data-go="${esc(p.id)}"><span class="nm">${esc(p.name||"Unnamed")}</span>${y?`<span class="yrs">${esc(y)}</span>`:""}${kids?`<span class="meta"><span class="chip">${kids} ${kids===1?"child":"children"}</span></span>`:""}</button>`;
+}
 
 function render(){
   if(!tree) return;
@@ -223,7 +288,7 @@ function render(){
   $("#backBtn").hidden = !(view==="tree" && trail.length);
   if(!loaded){ app.innerHTML = `<p class="hint">${esc(offlineNote || "Opening the tree…")}</p>`; return; }
   const hadFocus = document.activeElement && document.activeElement.id==="q";
-  app.innerHTML = (offlineNote?`<p class="note">${esc(offlineNote)}</p>`:"") + (view==="tree" ? renderTree() : renderAll());
+  app.innerHTML = (offlineNote?`<p class="note">${esc(offlineNote)}</p>`:"") + (view==="tree" ? renderPedigree() : renderAll());
   if(hadFocus){ const q=$("#q"); q.focus(); q.setSelectionRange(q.value.length,q.value.length); }
 }
 
@@ -237,7 +302,7 @@ function openSheet(mode){
   $("#otherWrap").hidden = true; $("#linkWrap").hidden = true; $("#pickWrap").hidden = true;
   if(mode.edit){
     const p = P(mode.edit);
-    $("#sheetTitle").textContent = "Edit details";
+    $("#sheetTitle").textContent = p.placeholder ? "Who was this?" : "Edit details";
     $("#f-name").value=p.name||""; $("#f-born").value=p.born||""; $("#f-died").value=p.died||""; $("#f-place").value=p.place||""; $("#f-note").value=p.note||"";
     $("#delZone").hidden = false;
   } else {
@@ -245,7 +310,7 @@ function openSheet(mode){
     $("#sheetTitle").textContent = relWords[mode.rel] + (f && mode.rel!=="root" ? ` for ${fname}` : "");
     if(mode.rel!=="root"){
       const blocked = new Set([f.id, ...(f.parents||[]), ...(f.spouses||[]), ...childrenOf(f.id).map(c=>c.id)]);
-      const others = [...people.values()].filter(p=>!blocked.has(p.id)).sort(byName);
+      const others = [...people.values()].filter(p=>!p.placeholder && !blocked.has(p.id)).sort(byName);
       if(others.length){
         $("#pickWrap").hidden = false;
         $("#f-existing").innerHTML = `<option value="">Someone new</option>` + others.map(p=>`<option value="${esc(p.id)}">${esc(p.name)}${years(p)?" ("+esc(years(p))+")":""}</option>`).join("");
@@ -288,7 +353,10 @@ $("#sheetForm").addEventListener("submit", async e => {
       const rel = sheetMode.rel, f = P(focusId);
       const person = pickedId ? {...P(pickedId)} : {id:newId(), ...fields, parents:[], spouses:[]};
       person.parents=[...(person.parents||[])]; person.spouses=[...(person.spouses||[])];
-      if(rel==="root"){ await put(person); focusId=person.id; keySet("ft-focus-"+tree.key, person.id); }
+      if(rel==="root"){
+        await put(person); focusId=person.id;
+        await setDefaultFocus(person.id);
+      }
       else if(rel==="parent"){
         const other = parentsOf(f)[0];
         if(other && !$("#linkWrap").hidden && $("#f-link").checked){
@@ -309,8 +377,11 @@ $("#sheetForm").addEventListener("submit", async e => {
         await put(person);
       }
       else if(rel==="sibling"){
-        if(!person.parents.length) person.parents = [...(f.parents||[])];
-        else if(pickedId) toast(`${person.name} already has parents listed, so they weren't changed.`);
+        if(!person.parents.length){
+          let shared = f.parents||[];
+          if(!shared.length) shared = [await ensureParentPlaceholder(f.id)];
+          person.parents = [...shared];
+        } else if(pickedId) toast(`${person.name} already has parents listed, so they weren't changed.`);
         await put(person);
       }
     }
@@ -320,7 +391,7 @@ $("#sheetForm").addEventListener("submit", async e => {
 
 $("#delBtn").addEventListener("click", () => {
   const p = P(sheetMode.edit);
-  $("#delText").textContent = `Remove ${p.name} from the tree for everyone? Their relatives stay.`;
+  $("#delText").textContent = `Remove ${p.name||"this person"} from the tree for everyone? Their relatives stay.`;
   $("#delConfirm").hidden = false; $("#delBtn").hidden = true;
 });
 $("#delNo").addEventListener("click", () => { $("#delConfirm").hidden = true; $("#delBtn").hidden = false; });
@@ -346,7 +417,16 @@ $("#menuBtn").addEventListener("click", () => {
   $("#inviteName").textContent = `Or they can tap "Join a tree" and type the name "${tree.name}" with the password.`;
   $("#forgetBtn").textContent = "Remove this tree from this device";
   $("#forgetBtn").dataset.armed = "";
+  const f = P(focusId);
+  $("#setDefaultBtn").hidden = !f || f.placeholder || tree.defaultFocus===f.id;
+  $("#setDefaultBtn").textContent = f ? `Set ${f.name||"this person"} as everyone's starting point` : "Set as everyone's starting point";
   $("#menu").hidden = false;
+});
+$("#setDefaultBtn").addEventListener("click", async () => {
+  const f = P(focusId); if(!f) return;
+  const ok = await setDefaultFocus(f.id);
+  if(ok) toast(`${f.name||"This person"} is now everyone's starting point.`);
+  $("#menu").hidden = true;
 });
 $("#copyBtn").addEventListener("click", async () => {
   const inp = $("#inviteLink");
@@ -362,7 +442,13 @@ $("#forgetBtn").addEventListener("click", e => {
 
 /* ================= events ================= */
 document.addEventListener("click", e => {
-  const g = e.target.closest("[data-go]"); if(g) return go(g.dataset.go);
+  const g = e.target.closest("[data-go]");
+  if(g){
+    const id = g.dataset.go, p = P(id);
+    if(p && p.placeholder) return openSheet({edit:id});
+    if(id === focusId) return openSheet({edit:id});
+    return go(id);
+  }
   const a = e.target.closest("[data-add]"); if(a) return openSheet({rel:a.dataset.add});
   const ed = e.target.closest("[data-edit]"); if(ed) return openSheet({edit:ed.dataset.edit});
   if(e.target.closest("[data-close]")) return closeSheet();

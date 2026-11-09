@@ -57,28 +57,21 @@ main{max-width:1400px;margin:0 auto;padding:18px var(--gutter-r) calc(48px + env
 .chip{font-size:.72rem;padding:1px 7px;border-radius:999px;background:var(--accent-soft);color:var(--accent);font-weight:500}
 .hint{font-size:.88rem;color:var(--muted);margin:0}
 
-/* ---- pedigree grid: flat generation rows, spouses always level ---- */
-#app{overflow-x:auto}
-.pedigree{display:flex;flex-direction:column;align-items:center;min-width:max-content;padding:4px 4px 160px}
-.anc-col,.desc-col{display:flex;flex-direction:column;align-items:center}
-.anc-up{display:flex;flex-direction:row;gap:28px;align-items:flex-end}
-.anc-row{display:flex;flex-direction:row;gap:10px;align-items:stretch;flex-wrap:nowrap}
-.desc-row{display:flex;flex-direction:row;gap:10px}
-.desc-down{display:flex;flex-direction:row;gap:22px;align-items:flex-start}
-.stem{width:2px;height:20px;background:var(--line);margin:0 auto;position:relative}
-.stem::after{content:"";position:absolute;left:50%;bottom:-3px;width:7px;height:7px;border-radius:50%;background:var(--line);transform:translateX(-50%)}
-.couple{display:flex;align-items:center;gap:4px;flex:none}
-.tie{width:14px;height:2px;background:var(--line);flex:none}
+/* ---- pedigree grid: exact-coordinate generation rows ---- */
+#app{overflow:auto}
+.pedigree{position:relative;padding-bottom:170px}
+.pedigree .lines{position:absolute;left:0;top:0;pointer-events:none}
+.fam-line{stroke:var(--line);stroke-width:1.5}
+.tie-line{stroke:var(--line);stroke-width:1.5;stroke-dasharray:3 3}
 
-.node{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;width:108px;padding:9px 8px;border-radius:14px;background:var(--card);border:1.5px solid var(--line);text-align:center}
-.node:hover{border-color:var(--accent)}
+.node{position:absolute;transform:translate(-50%,-50%);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;width:108px;padding:9px 8px;border-radius:14px;background:var(--card);border:1.5px solid var(--line);text-align:center}
+.node:hover{border-color:var(--accent);z-index:2}
 .node .nm{font-size:.88rem;line-height:1.18}
 .node .yrs{font-size:.7rem;color:var(--muted);font-variant-numeric:tabular-nums}
 .node .yrs.unk{font-style:italic;opacity:.8}
 .node .chip{margin-top:2px}
-.node.me{border:2.5px solid var(--accent);background:var(--accent-soft);box-shadow:0 2px 10px rgb(0 0 0/.1)}
+.node.me{border:2.5px solid var(--accent);background:var(--accent-soft);box-shadow:0 2px 10px rgb(0 0 0/.1);z-index:3}
 .node.dim{opacity:.68;border-style:dashed;background:transparent}
-.node.more{position:relative}
 .node.more::after{content:"⋯";color:var(--accent);font-size:.78rem;line-height:1;margin-top:1px}
 .node.ph{opacity:.6;border-style:dotted;font-style:italic;color:var(--muted);width:auto;padding:9px 14px}
 

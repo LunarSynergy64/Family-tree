@@ -210,50 +210,104 @@ function go(id, push=true){
   focusId=id; view="tree"; render(); window.scrollTo({top:0});
 }
 
-/* Generations are flat rows (no vertical sorting by date - a spouse always
-   sits right beside their partner, at the same level, never offset). Within
-   a row, people are just ordered left-to-right by birth date for a sensible
-   reading order. */
-function personBubble(p, opts={}){
-  if(p.placeholder) return `<button class="node ph" data-go="${esc(p.id)}">Unknown</button>`;
-  const isFocal = p.id===focusId;
-  const more = opts.dim && (parentsOf(p).length || childrenOf(p.id).length);
-  return `<button class="node${opts.dim?" dim":""}${isFocal?" me":""}${more?" more":""}" data-go="${esc(p.id)}">
+/* Generations are flat rows (a fixed height apart, never based on birth
+   date - a spouse always sits at exactly the same height as their partner).
+   Placement is computed as exact (x, generation) coordinates so the line
+   from a clicked person up to their parents always points at that specific
+   person, not just at the middle of whatever row they're sitting in - and
+   every other relative (siblings, their spouses) gets their own line too,
+   so the "whose parents are whose" is never ambiguous. */
+const SLOT_W = 124, ROW_H = 148;
+
+function ancWidth(id, excludeSpouseId){
+  const p = P(id);
+  const sibs = siblingsOf(p).map(s=>s.p);
+  const folks = [p, ...sibs];
+  const rowWidth = folks.reduce((sum,f)=> sum + 1 + partnersOf(f).filter(s=>!(f.id===p.id && s.id===excludeSpouseId)).length, 0);
+  const parents = parentsOf(p);
+  const upWidth = parents.length ? parents.reduce((sum,par,i)=>sum+ancWidth(par.id, parents.length>1?parents[1-i].id:null),0) : 0;
+  return Math.max(rowWidth, upWidth, 1);
+}
+function descWidth(id){
+  const p = P(id);
+  const rowWidth = 1 + partnersOf(p).length;
+  const kids = childrenOf(id);
+  const downWidth = kids.length ? kids.reduce((sum,k)=>sum+descWidth(k.id),0) : 0;
+  return Math.max(rowWidth, downWidth, 1);
+}
+
+function placeAncestor(placed, lines, id, excludeSpouseId, xLeft, width, gen){
+  const p = P(id);
+  const parents = parentsOf(p);
+  const parentPos = [];
+  if(parents.length){
+    const widths = parents.map((par,i)=>ancWidth(par.id, parents.length>1?parents[1-i].id:null));
+    const totalW = widths.reduce((a,b)=>a+b,0);
+    let px = xLeft + (width-totalW)/2;
+    parents.forEach((par,i)=>{
+      parentPos.push(placeAncestor(placed, lines, par.id, parents.length>1?parents[1-i].id:null, px, widths[i], gen-1));
+      px += widths[i];
+    });
+  }
+  const sibs = siblingsOf(p);
+  const folks = [{person:p, half:false, isPivot:true}, ...sibs.map(s=>({person:s.p, half:s.half, isPivot:false}))]
+    .sort((a,b)=>byBorn(a.person,b.person));
+  const rowWidth = folks.reduce((sum,f)=> sum + 1 + partnersOf(f.person).filter(s=>!(f.isPivot && s.id===excludeSpouseId)).length, 0);
+  let cursor = xLeft + (width-rowWidth)/2;
+
+  let pivotPos = null;
+  folks.forEach(f=>{
+    const person = f.person;
+    const x = cursor + 0.5; cursor += 1;
+    placed.push({id:person.id, x, gen, half:f.half, placeholder:!!person.placeholder, deadEnd:!f.isPivot});
+    if(f.isPivot) pivotPos = {x, gen};
+
+    const myParents = person.parents||[];
+    parentPos.forEach((pp,i)=>{ if(myParents.includes(parents[i].id)) lines.push({ax:pp.x, agen:pp.gen, bx:x, bgen:gen}); });
+
+    partnersOf(person).filter(s=>!(f.isPivot && s.id===excludeSpouseId)).forEach(sp=>{
+      const sx = cursor+0.5; cursor++;
+      placed.push({id:sp.id, x:sx, gen, dim:true, placeholder:!!sp.placeholder, deadEnd:true});
+      lines.push({ax:x, agen:gen, bx:sx, bgen:gen, tie:true});
+    });
+  });
+  return pivotPos;
+}
+function placeDescendant(placed, lines, id, xLeft, width, gen){
+  const p = P(id);
+  const x = xLeft + width/2;
+  placed.push({id:p.id, x, gen, placeholder:!!p.placeholder});
+
+  let cursor = x+0.5;
+  partnersOf(p).forEach(sp=>{
+    const sx = cursor; cursor++;
+    placed.push({id:sp.id, x:sx, gen, dim:true, placeholder:!!sp.placeholder, deadEnd:true});
+    lines.push({ax:x, agen:gen, bx:sx, bgen:gen, tie:true});
+  });
+
+  const kids = childrenOf(id).sort(byBorn);
+  if(kids.length){
+    const widths = kids.map(k=>descWidth(k.id));
+    const totalW = widths.reduce((a,b)=>a+b,0);
+    let cx = x - totalW/2;
+    kids.forEach((k,i)=>{
+      const kpos = placeDescendant(placed, lines, k.id, cx, widths[i], gen+1);
+      lines.push({ax:x, agen:gen, bx:kpos.x, bgen:gen+1});
+      cx += widths[i];
+    });
+  }
+  return {x, gen};
+}
+
+function bubbleHtml(n, x, y){
+  const p = P(n.id); if(!p) return "";
+  if(p.placeholder) return `<button class="node ph" style="left:${x}px;top:${y}px" data-go="${esc(n.id)}">Unknown</button>`;
+  const more = n.deadEnd && (parentsOf(p).length || childrenOf(p.id).length);
+  return `<button class="node${n.dim?" dim":""}${n.id===focusId?" me":""}${more?" more":""}" style="left:${x}px;top:${y}px" data-go="${esc(n.id)}">
     <span class="nm">${esc(p.name||"Unnamed")}</span>
     <span class="yrs${birthKnown(p)?"":" unk"}">${esc(birthLabel(p))}</span>
-    ${opts.half?`<span class="chip">half</span>`:""}
+    ${n.half?`<span class="chip">half</span>`:""}
   </button>`;
-}
-function unit(p, opts={}){
-  const spouses = partnersOf(p).filter(s=>s.id!==opts.excludeSpouseId);
-  let h = personBubble(p, {half:opts.half});
-  spouses.forEach(s => { h += `<span class="tie"></span>` + personBubble(s, {dim:true}); });
-  return `<div class="couple">${h}</div>`;
-}
-function ancestorFan(id, excludeSpouseId, depth=0){
-  const p = P(id); if(!p || depth>12) return "";
-  const sibs = siblingsOf(p);
-  const rowFolks = [{p, half:false}, ...sibs].sort((a,b)=>byBorn(a.p,b.p));
-  const rowHtml = rowFolks.map(({p:person, half}) =>
-    unit(person, {excludeSpouseId: person.id===p.id ? excludeSpouseId : null, half})
-  ).join("");
-  const parents = parentsOf(p);
-  let upHtml = "";
-  if(parents.length){
-    const cols = parents.map((par,i) => ancestorFan(par.id, parents.length>1 ? parents[1-i].id : null, depth+1)).join("");
-    upHtml = `<div class="anc-up">${cols}</div><div class="stem"></div>`;
-  }
-  return `<div class="anc-col">${upHtml}<div class="anc-row">${rowHtml}</div></div>`;
-}
-function descendantTree(id, depth=0){
-  const p = P(id); if(!p || depth>20) return "";
-  const kids = childrenOf(id).sort(byBorn);
-  let downHtml = "";
-  if(kids.length){
-    const cols = kids.map(k => descendantTree(k.id, depth+1)).join("");
-    downHtml = `<div class="stem"></div><div class="desc-down">${cols}</div>`;
-  }
-  return `<div class="desc-col"><div class="desc-row">${unit(p)}</div>${downHtml}</div>`;
 }
 function dockHtml(f){
   if(!f || f.placeholder) return "";
@@ -275,10 +329,37 @@ function renderPedigree(){
   pickFocus();
   const f = P(focusId);
   if(!f) return `<p class="hint">Nobody to show.</p>`;
+
+  const placed = [], lines = [];
+  const focalPos = placeAncestor(placed, lines, f.id, null, 0, ancWidth(f.id, null), 0);
+
   const kids = childrenOf(f.id).sort(byBorn);
-  const descHtml = kids.length ? `<div class="stem"></div><div class="desc-down">${kids.map(k=>descendantTree(k.id)).join("")}</div>` : "";
-  const fanHtml = ancestorFan(f.id, null);
-  return `<div class="pedigree">${fanHtml}${descHtml}</div>${dockHtml(f)}`;
+  if(kids.length){
+    const widths = kids.map(k=>descWidth(k.id));
+    const totalW = widths.reduce((a,b)=>a+b,0);
+    let cx = focalPos.x - totalW/2;
+    kids.forEach((k,i)=>{
+      const kpos = placeDescendant(placed, lines, k.id, cx, widths[i], 1);
+      lines.push({ax:focalPos.x, agen:0, bx:kpos.x, bgen:1});
+      cx += widths[i];
+    });
+  }
+
+  const xs = placed.map(n=>n.x), gens = placed.map(n=>n.gen);
+  const minX = Math.min(...xs), maxX = Math.max(...xs), minGen = Math.min(...gens), maxGen = Math.max(...gens);
+  const PAD_X = 70, PAD_Y = 60;
+  const px = x => (x-minX)*SLOT_W + PAD_X;
+  const py = g => (g-minGen)*ROW_H + PAD_Y;
+  const width = (maxX-minX)*SLOT_W + PAD_X*2;
+  const height = (maxGen-minGen)*ROW_H + PAD_Y*2 + 170;
+
+  const linesHtml = lines.map(l => `<line x1="${px(l.ax).toFixed(1)}" y1="${py(l.agen).toFixed(1)}" x2="${px(l.bx).toFixed(1)}" y2="${py(l.bgen).toFixed(1)}" class="${l.tie?"tie-line":"fam-line"}"/>`).join("");
+  const nodesHtml = placed.map(n => bubbleHtml(n, px(n.x), py(n.gen))).join("");
+
+  return `<div class="pedigree" style="width:${width}px;height:${height}px">
+    <svg class="lines" width="${width}" height="${height}">${linesHtml}</svg>
+    ${nodesHtml}
+  </div>${dockHtml(f)}`;
 }
 
 function renderAll(){

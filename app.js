@@ -475,13 +475,13 @@ function placeAncestor(placed, edges, id, excludeSpouseId, xLeft, width, gen, ex
 
     partners.forEach(sp=>{
       const sx = posOf[sp.id];
-      placed.push({id:sp.id, x:sx, gen, dim:true, placeholder:!!sp.placeholder, deadEnd:true});
-      edges.push({tie:true, a:{x, gen}, b:{x:sx, gen}, divorced:isDivorced(person, sp)});
+      placed.push({id:sp.id, x:sx, gen, dim:true, placeholder:!!sp.placeholder, deadEnd:true, divorced:isDivorced(person, sp)});
+      edges.push({tie:true, a:{x, gen}, b:{x:sx, gen}});
     });
     if(extra){
       const sx = posOf[extra.id];
-      placed.push({id:extra.id, x:sx, gen, dim:true, placeholder:!!extra.placeholder, deadEnd:true});
-      edges.push({tie:true, a:{x, gen}, b:{x:sx, gen}, divorced:isDivorced(person, extra)});
+      placed.push({id:extra.id, x:sx, gen, dim:true, placeholder:!!extra.placeholder, deadEnd:true, divorced:isDivorced(person, extra)});
+      edges.push({tie:true, a:{x, gen}, b:{x:sx, gen}});
     }
   });
   return pivotPos;
@@ -505,8 +505,8 @@ function placeDescendant(placed, edges, id, xLeft, width, gen){
   const spouseX = new Map();
   partners.forEach(sp=>{
     const sx = posOf[sp.id];
-    placed.push({id:sp.id, x:sx, gen, dim:true, placeholder:!!sp.placeholder, deadEnd:true});
-    edges.push({tie:true, a:{x, gen}, b:{x:sx, gen}, divorced:isDivorced(p, sp)});
+    placed.push({id:sp.id, x:sx, gen, dim:true, placeholder:!!sp.placeholder, deadEnd:true, divorced:isDivorced(p, sp)});
+    edges.push({tie:true, a:{x, gen}, b:{x:sx, gen}});
     spouseX.set(sp.id, sx);
   });
 
@@ -588,7 +588,7 @@ function bubbleHtml(n, x, y){
   const more = (n.deadEnd && (parentsOf(p).length || childrenOf(p.id).length)) || (isBlocked(p) && parentsOf(p).length>0);
   const genderCls = p.gender==="m" ? " g-m" : p.gender==="f" ? " g-f" : "";
   return `<button class="node${n.dim?" dim":""}${n.id===focusId?" me":""}${more?" more":""}${genderCls}" style="left:${x}px;top:${y}px" data-go="${esc(n.id)}">
-    <span class="nm">${esc(displayName(p)||"Unnamed")}${isAnchor(p)?` <span class="anchorBadge" title="Anchor point">⚓</span>`:""}</span>
+    <span class="nm">${esc(displayName(p)||"Unnamed")}${isAnchor(p)?` <span class="anchorBadge" title="Anchor point">⚓</span>`:""}${n.divorced?` <span class="divorcedBadge" title="Divorced">✕</span>`:""}</span>
     ${p.maidenName?`<span class="maiden">(${esc(p.maidenName)})</span>`:""}
     <span class="yrs${birthKnown(p)?"":" unk"}">${esc(birthLabel(p))}</span>
     ${n.half?`<span class="chip">half</span>`:""}

@@ -135,6 +135,7 @@ main{max-width:1400px;margin:0 auto;padding:18px var(--gutter-r) calc(48px + env
 .maiden{font-size:.72rem;color:var(--muted);font-style:italic}
 .dockInfo .maiden{font-family:var(--body);margin-top:2px}
 .anchorBadge{font-size:.82em}
+.divorcedBadge{font-size:.78em;color:var(--danger);font-weight:700}
 .anchorHint{margin-top:2px}
 .copyrow{display:flex;gap:8px}
 .copyrow input{flex:1;min-width:0}

@@ -81,7 +81,7 @@ main{max-width:1400px;margin:0 auto;padding:18px var(--gutter-r) calc(48px + env
 .uncertain-q{fill:var(--muted);font-size:12px;font-weight:700;font-family:var(--body)}
 .stub-line{stroke:var(--muted);stroke-width:1.5;stroke-dasharray:2 3;opacity:.55}
 
-.node{position:absolute;transform:translate(-50%,-50%);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;width:108px;padding:9px 8px;border-radius:14px;background:var(--card);border:1.5px solid var(--line);text-align:center}
+.node{position:absolute;transform:translate(-50%,-50%) scale(var(--ns,1));display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;width:108px;padding:9px 8px;border-radius:14px;background:var(--card);border:1.5px solid var(--line);text-align:center}
 .node:hover{border-color:var(--accent);z-index:2}
 .node .nm{font-size:.88rem;line-height:1.18}
 .node .yrs{font-size:.7rem;color:var(--muted);font-variant-numeric:tabular-nums}

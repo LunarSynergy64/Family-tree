@@ -346,6 +346,30 @@ function go(id, push=true){
    every other relative (siblings, their spouses) gets their own line too,
    so the "whose parents are whose" is never ambiguous. */
 const SLOT_W = 124, ROW_H = 148;
+// A deep subtree's own width used to propagate all the way back up,
+// forcing everyone near the focal person to spread out just to make room
+// for generations they're barely related to. Each unit now shrinks the
+// further its generation sits from the focal person (gen 0) - both the
+// width it reserves and its own on-screen size (see bubbleHtml's --ns) -
+// so a wide, distant branch takes less room instead of pushing the near
+// generations apart to fit it. Descendants of an anchor point get a
+// longer full-size run first, since that's usually the generation you
+// actually came here to look at closely.
+let rootIsAnchorForScale = false;
+function genScale(gen){
+  if(gen>=0){
+    const fullRun = rootIsAnchorForScale ? 4 : 2;
+    if(gen<=fullRun) return 1;
+    if(gen<=fullRun+2) return 0.75;
+    if(gen<=fullRun+4) return 0.55;
+    return 0.4;
+  }
+  const d = -gen;
+  if(d<=2) return 1;
+  if(d<=4) return 0.75;
+  if(d<=6) return 0.55;
+  return 0.4;
+}
 
 /* A real family tree branches both ways going up, and fully expanding both
    parents at every single generation doubles the width each time - by a
@@ -407,7 +431,7 @@ const isDivorced = (a, b) => !!(a && b && ((a.divorced||[]).includes(b.id) || (b
 // partner sits between them, since the line to a non-adjacent partner
 // runs straight behind that in-between node. So: X on the line when
 // adjacent, X on the ex-partner's own node otherwise.
-const adjacentX = (ax, bx) => Math.abs(ax-bx)===1;
+const adjacentX = (ax, bx, gen) => Math.abs(Math.abs(ax-bx)-genScale(gen))<0.01;
 function reachableAnchors(id, visited){
   visited = visited || new Set();
   const result = new Set();
@@ -459,14 +483,17 @@ function splitParents(parents){
 
 function ancWidth(id, excludeSpouseId, extraPartnerId, gen){
   const p = P(id);
+  const step = genScale(gen);
   const collapsedHidden = isHiddenAt(p, gen);
   const sibs = leadsToCollapse(id, gen) ? [] : siblingsOf(p).map(s=>s.p);
   const folks = [p, ...sibs];
   // a collapsed-and-unopened pivot takes exactly one slot - their partner(s)
-  // are folded into that same box rather than drawn alongside it.
+  // are folded into that same box rather than drawn alongside it. Every
+  // slot at this generation is `step` wide, not a flat 1, so a distant
+  // row's own width shrinks right along with its on-screen size.
   const rowWidth = folks.reduce((sum,f)=> {
-    if(f.id===p.id && collapsedHidden) return sum+1;
-    return sum + 1 + partnersOf(f).filter(s=>!(f.id===p.id && s.id===excludeSpouseId)).length + ((f.id===p.id && extraPartnerId)?1:0);
+    if(f.id===p.id && collapsedHidden) return sum+step;
+    return sum + step*(1 + partnersOf(f).filter(s=>!(f.id===p.id && s.id===excludeSpouseId)).length + ((f.id===p.id && extraPartnerId)?1:0));
   }, 0);
   // an anchor is a hard stop by default - never recurse past one into its
   // own parents, even if it happens to have some recorded - unless it's
@@ -484,14 +511,15 @@ function ancWidth(id, excludeSpouseId, extraPartnerId, gen){
         return sum + ancWidth(par.id, exclude, extra, gen-1);
       }, 0)
     : 0;
-  return Math.max(rowWidth, upWidth, 1);
+  return Math.max(rowWidth, upWidth, step);
 }
-function descWidth(id){
+function descWidth(id, gen){
   const p = P(id);
-  const rowWidth = 1 + partnersOf(p).length;
+  const step = genScale(gen);
+  const rowWidth = step*(1 + partnersOf(p).length);
   const kids = childrenOf(id);
-  const downWidth = kids.length ? kids.reduce((sum,k)=>sum+descWidth(k.id),0) : 0;
-  return Math.max(rowWidth, downWidth, 1);
+  const downWidth = kids.length ? kids.reduce((sum,k)=>sum+descWidth(k.id, gen+1),0) : 0;
+  return Math.max(rowWidth, downWidth, step);
 }
 
 function placeAncestor(placed, edges, id, excludeSpouseId, xLeft, width, gen, extraPartnerId, pinSide){
@@ -534,7 +562,7 @@ function placeAncestor(placed, edges, id, excludeSpouseId, xLeft, width, gen, ex
     // explicitly marked otherwise (notPartnerWith, set from the Edit sheet).
     if(expand.length===2 && !(expand[0].notPartnerWith||[]).includes(expand[1].id)){
       const divorced = isDivorced(expand[0], expand[1]);
-      const adj = adjacentX(parentPos[0].x, parentPos[1].x);
+      const adj = adjacentX(parentPos[0].x, parentPos[1].x, gen-1);
       edges.push({tie:true, a:parentPos[0], b:parentPos[1], divorced: divorced && adj});
       // each parent here is the pivot of their own, possibly-wide ancestor
       // fork (siblings, an attached spouse of their own) - when they're
@@ -561,9 +589,10 @@ function placeAncestor(placed, edges, id, excludeSpouseId, xLeft, width, gen, ex
     const others = folks.filter(f=>!f.isPivot);
     folks = pinSide==="right" ? [...others, pivotFolk] : [pivotFolk, ...others];
   }
+  const step = genScale(gen);
   const rowWidth = folks.reduce((sum,f)=> {
-    if(f.isPivot && collapsedHidden) return sum+1;
-    return sum + 1 + partnersOf(f.person).filter(s=>!(f.isPivot && s.id===excludeSpouseId)).length + ((f.isPivot && extraPartnerId)?1:0);
+    if(f.isPivot && collapsedHidden) return sum+step;
+    return sum + step*(1 + partnersOf(f.person).filter(s=>!(f.isPivot && s.id===excludeSpouseId)).length + ((f.isPivot && extraPartnerId)?1:0));
   }, 0);
   // Centering this row purely within the space handed down from the child
   // below breaks once the pivot has many siblings: the pivot's own spot
@@ -594,7 +623,7 @@ function placeAncestor(placed, edges, id, excludeSpouseId, xLeft, width, gen, ex
     const extra = (f.isPivot && extraPartnerId && !folkCollapsed) ? P(extraPartnerId) : null;
     const unitIds = sortIdsByGender([person.id, ...partners.map(s=>s.id), ...(extra?[extra.id]:[])]);
     const posOf = {};
-    unitIds.forEach(uid => { posOf[uid] = cursor+0.5; cursor++; });
+    unitIds.forEach(uid => { posOf[uid] = cursor+step/2; cursor += step; });
 
     const x = posOf[person.id];
     placed.push({id:person.id, x, gen, half:f.half, placeholder:!!person.placeholder, deadEnd:!f.isPivot, collapsedBox:folkCollapsed});
@@ -622,7 +651,7 @@ function placeAncestor(placed, edges, id, excludeSpouseId, xLeft, width, gen, ex
 
     partners.forEach(sp=>{
       const sx = posOf[sp.id];
-      const divorced = isDivorced(person, sp), adj = adjacentX(x, sx);
+      const divorced = isDivorced(person, sp), adj = adjacentX(x, sx, gen);
       placed.push({id:sp.id, x:sx, gen, dim:true, placeholder:!!sp.placeholder, deadEnd:true, divorced: divorced && !adj});
       edges.push({tie:true, a:{x, gen}, b:{x:sx, gen}, divorced: divorced && adj});
       // a dim attached partner never expands further themselves, so their
@@ -631,7 +660,7 @@ function placeAncestor(placed, edges, id, excludeSpouseId, xLeft, width, gen, ex
     });
     if(extra){
       const sx = posOf[extra.id];
-      const divorced = isDivorced(person, extra), adj = adjacentX(x, sx);
+      const divorced = isDivorced(person, extra), adj = adjacentX(x, sx, gen);
       placed.push({id:extra.id, x:sx, gen, dim:true, placeholder:!!extra.placeholder, deadEnd:true, divorced: divorced && !adj});
       edges.push({tie:true, a:{x, gen}, b:{x:sx, gen}, divorced: divorced && adj});
       if(!extra.placeholder && (extra.parents||[]).length) edges.push({stub:true, x:sx, gen});
@@ -641,24 +670,25 @@ function placeAncestor(placed, edges, id, excludeSpouseId, xLeft, width, gen, ex
 }
 function placeDescendant(placed, edges, id, xLeft, width, gen){
   const p = P(id);
+  const step = genScale(gen);
   const partners = partnersOf(p);
   // The pivot + their spouse(s) only need (1 + partners.length) slots, but
   // `width` can be wider than that to make room for grandchildren below -
   // center that couple unit within the full width rather than centering
   // the pivot alone, otherwise a spouse can land right on the boundary
   // with the next sibling's own space when there's no extra room needed.
-  const unitWidth = 1 + partners.length;
+  const unitWidth = step*(1 + partners.length);
   const unitLeft = xLeft + (width-unitWidth)/2;
   const unitIds = sortIdsByGender([p.id, ...partners.map(s=>s.id)]);
   const posOf = {};
-  unitIds.forEach((uid,i) => { posOf[uid] = unitLeft + i + 0.5; });
+  unitIds.forEach((uid,i) => { posOf[uid] = unitLeft + step*i + step/2; });
   const x = posOf[p.id];
   placed.push({id:p.id, x, gen, placeholder:!!p.placeholder});
 
   const spouseX = new Map();
   partners.forEach(sp=>{
     const sx = posOf[sp.id];
-    const divorced = isDivorced(p, sp), adj = adjacentX(x, sx);
+    const divorced = isDivorced(p, sp), adj = adjacentX(x, sx, gen);
     placed.push({id:sp.id, x:sx, gen, dim:true, placeholder:!!sp.placeholder, deadEnd:true, divorced: divorced && !adj});
     edges.push({tie:true, a:{x, gen}, b:{x:sx, gen}, divorced: divorced && adj});
     spouseX.set(sp.id, sx);
@@ -666,7 +696,7 @@ function placeDescendant(placed, edges, id, xLeft, width, gen){
 
   const kids = childrenOf(id).sort(byBorn);
   if(kids.length){
-    const widths = kids.map(k=>descWidth(k.id));
+    const widths = kids.map(k=>descWidth(k.id, gen+1));
     const totalW = widths.reduce((a,b)=>a+b,0);
     // center the children block on the full allocated width, not on the
     // pivot's own position - when the pivot has a spouse, their own x sits
@@ -684,7 +714,7 @@ function placeDescendant(placed, edges, id, xLeft, width, gen){
       // the two positions can land the trunk on whoever happens to sit
       // between them (looking like a third parent), so fall back to a
       // stub per parent in that case, same as independently-forked ones.
-      const adjacent = parentPts.length<2 || adjacentX(parentPts[0].x, parentPts[1].x);
+      const adjacent = parentPts.length<2 || adjacentX(parentPts[0].x, parentPts[1].x, gen);
       // Same "don't overclaim" rule as the ancestor direction: when it's
       // unclear whether this child or their own spouse is the actual blood
       // descendant, land the connector between the two of them.
@@ -766,13 +796,18 @@ function renderEdges(edges, px, py){
 
 function bubbleHtml(n, x, y){
   const p = P(n.id); if(!p) return "";
-  if(p.placeholder) return `<button class="node ph" style="left:${x}px;top:${y}px" data-go="${esc(n.id)}">Unknown</button>`;
+  // The person you actually selected stays full-size regardless of how
+  // far they ended up from the anchor rooting this view - everyone else
+  // shrinks the further their own generation sits from the focal point.
+  const scale = n.id===focusId ? 1 : genScale(n.gen);
+  const scaleStyle = scale<1 ? `--ns:${scale.toFixed(2)};` : "";
+  if(p.placeholder) return `<button class="node ph" style="left:${x}px;top:${y}px;${scaleStyle}" data-go="${esc(n.id)}">Unknown</button>`;
   if(n.collapsedBox){
     // An auto-collapsed-by-zoom box (nobody tapped "Collapse this branch"
     // here, just zoomed out far enough) has no branchName to fall back
     // on - borrow the same auto-name the quick collapse icon would use.
     const branchLabel = p.branchName || `The ${surname(p)} Family`;
-    return `<button class="node collapsedNode" style="left:${x}px;top:${y}px" data-peek="${esc(n.id)}">
+    return `<button class="node collapsedNode" style="left:${x}px;top:${y}px;${scaleStyle}" data-peek="${esc(n.id)}">
       <span class="collapseIcon" data-collapse="${esc(n.id)}" title="Expand this branch for good">⊞</span>
       <span class="nm">${esc(branchLabel)}</span>
       <span class="yrs">Tap to peek</span>
@@ -802,7 +837,7 @@ function bubbleHtml(n, x, y){
   const uncertainBadge = (p.parentsUncertain && uncertainPartner)
     ? ` <span class="uncertainBadge" data-resolve="${esc(p.id)}" title="${esc(`Not sure if these are ${displayName(p)||"their"}'s parents or ${displayName(uncertainPartner)||"their partner"}'s - tap to say for sure`)}">?</span>`
     : "";
-  return `<button class="node${n.dim?" dim":""}${n.id===focusId?" me":""}${more?" more":""}${genderCls}" style="left:${x}px;top:${y}px" data-go="${esc(n.id)}">
+  return `<button class="node${n.dim?" dim":""}${n.id===focusId?" me":""}${more?" more":""}${genderCls}" style="left:${x}px;top:${y}px;${scaleStyle}" data-go="${esc(n.id)}">
     ${collapseIcon}
     <span class="nm">${esc(displayName(p)||"Unnamed")}${isAnchor(p)?` <span class="anchorBadge" title="Anchor point">⚓</span>`:""}${n.divorced?` <span class="divorcedBadge" title="Divorced">✕</span>`:""}${uncertainBadge}</span>
     ${p.maidenName?`<span class="maiden">(${esc(p.maidenName)})</span>`:""}
@@ -839,6 +874,10 @@ function renderPedigree(){
   const root = P(rootId);
   if(!root) return `<p class="hint">Nobody to show.</p>`;
   currentAnchor = activeAnchor;
+  // An anchor's own descendants are usually exactly what you came here to
+  // look at closely, so they get a longer full-size run before shrinking
+  // (see genScale) than descendants of an ordinary focal person would.
+  rootIsAnchorForScale = isAnchor(root);
 
   const placed = [], edges = [];
   const focalPos = placeAncestor(placed, edges, root.id, null, 0, ancWidth(root.id, null, null, 0), 0);
@@ -847,7 +886,7 @@ function renderPedigree(){
 
   const kids = childrenOf(root.id).sort(byBorn);
   if(kids.length){
-    const widths = kids.map(k=>descWidth(k.id));
+    const widths = kids.map(k=>descWidth(k.id, 1));
     const totalW = widths.reduce((a,b)=>a+b,0);
     // center on the root+spouse couple's own midpoint, same as inside
     // placeDescendant, so a spouse doesn't pull the whole fan off-center.
@@ -861,7 +900,7 @@ function renderPedigree(){
       (kp.parents||[]).forEach(pid=>{ if(focalSpouseX.has(pid)) parentPts.push({x:focalSpouseX.get(pid), gen:0}); });
       // same reasoning as the matching spot in placeDescendant - only
       // trunk the two parents together when they're actually adjacent.
-      const adjacent = parentPts.length<2 || adjacentX(parentPts[0].x, parentPts[1].x);
+      const adjacent = parentPts.length<2 || adjacentX(parentPts[0].x, parentPts[1].x, 0);
       // same "don't overclaim" rule as placeDescendant/placeAncestor.
       const uncertain = !!kp.parentsUncertain;
       let childX = kpos.x;

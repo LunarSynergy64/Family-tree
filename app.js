@@ -574,6 +574,11 @@ function placeAncestor(placed, edges, id, excludeSpouseId, xLeft, width, gen, ex
 
     const myParents = person.parents||[];
     const connected = parentPos.filter((pp,i)=> myParents.includes(expand[i].id)).map(pp=>({x:pp.x, gen:pp.gen}));
+    // A node with recorded parents that aren't being drawn here (blocked by
+    // an anchor, collapsed, or simply never expanded past this dead end) is
+    // easy to mistake for "nothing more was ever entered" - a short grayed
+    // stub reaching up into the empty gap above says otherwise.
+    if(!person.placeholder && !folkCollapsed && myParents.length && !connected.length) edges.push({stub:true, x, gen});
     // these two parents are each their own independently-placed ancestor
     // fork, so they may not sit next to each other - never collapse them
     // to a single midpoint trunk (adjacent:false forces a stub per parent).
@@ -592,12 +597,16 @@ function placeAncestor(placed, edges, id, excludeSpouseId, xLeft, width, gen, ex
       const divorced = isDivorced(person, sp), adj = adjacentX(x, sx);
       placed.push({id:sp.id, x:sx, gen, dim:true, placeholder:!!sp.placeholder, deadEnd:true, divorced: divorced && !adj});
       edges.push({tie:true, a:{x, gen}, b:{x:sx, gen}, divorced: divorced && adj});
+      // a dim attached partner never expands further themselves, so their
+      // own recorded parents (if any) would otherwise vanish with no trace.
+      if(!sp.placeholder && (sp.parents||[]).length) edges.push({stub:true, x:sx, gen});
     });
     if(extra){
       const sx = posOf[extra.id];
       const divorced = isDivorced(person, extra), adj = adjacentX(x, sx);
       placed.push({id:extra.id, x:sx, gen, dim:true, placeholder:!!extra.placeholder, deadEnd:true, divorced: divorced && !adj});
       edges.push({tie:true, a:{x, gen}, b:{x:sx, gen}, divorced: divorced && adj});
+      if(!extra.placeholder && (extra.parents||[]).length) edges.push({stub:true, x:sx, gen});
     }
   });
   return pivotPos;
@@ -671,6 +680,15 @@ function renderEdges(edges, px, py){
   let svg = "";
   const groups = new Map();
   edges.forEach(e=>{
+    if(e.stub){
+      // A short, muted line reaching up into the empty gap above a node -
+      // signals "more is recorded here, just not drawn" (blocked by an
+      // anchor, collapsed, or a dead end that never expands) without
+      // claiming to show an actual connection to anyone specific.
+      const x1 = px(e.x), yTop = py(e.gen);
+      svg += `<line x1="${x1.toFixed(1)}" y1="${(yTop-30).toFixed(1)}" x2="${x1.toFixed(1)}" y2="${(yTop-58).toFixed(1)}" class="stub-line"/>`;
+      return;
+    }
     if(e.tie){
       const x1=px(e.a.x), y1=py(e.a.gen), x2=px(e.b.x), y2=py(e.b.gen);
       svg += `<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" class="tie-line"/>`;
@@ -817,7 +835,9 @@ function renderPedigree(){
 
   const xs = placed.map(n=>n.x), gens = placed.map(n=>n.gen);
   const minX = Math.min(...xs), maxX = Math.max(...xs), minGen = Math.min(...gens), maxGen = Math.max(...gens);
-  const PAD_X = 70, PAD_Y = 60;
+  // PAD_Y leaves enough headroom above the topmost row for its own "more
+  // above" stub line (see renderEdges) to fit without being clipped.
+  const PAD_X = 70, PAD_Y = 78;
   const px = x => (x-minX)*SLOT_W + PAD_X;
   const py = g => (g-minGen)*ROW_H + PAD_Y;
   const width = (maxX-minX)*SLOT_W + PAD_X*2;

@@ -488,7 +488,14 @@ function placeAncestor(placed, edges, id, excludeSpouseId, xLeft, width, gen, ex
     const extraFor = i => (expand.length===1 && suppressed && !(expand[i].spouses||[]).includes(suppressed.id)) ? suppressed.id : null;
     const widths = expand.map((par,i)=>ancWidth(par.id, excludeFor(i), extraFor(i)));
     const totalW = widths.reduce((a,b)=>a+b,0);
-    let px = xLeft + (width-totalW)/2;
+    // When THIS row is itself pinned to an edge (to stay adjacent to its
+    // own co-parent - see below), center these grandparents in the full
+    // allotted width would leave a growing gap between them and wherever
+    // this row actually ends up, stretching their connecting line further
+    // with every extra generation of width above. Hug the same edge
+    // instead, so the whole chain stays compact and only the sibling side
+    // (the overflow) spreads out as far as it actually needs to.
+    let px = pinSide==="right" ? xLeft+width-totalW : pinSide==="left" ? xLeft : xLeft + (width-totalW)/2;
     // When both parents each get their own independent ancestor fork, that
     // parent's own siblings share its block - without pinning, the sibling
     // sort (by birth) can freely land a sibling between the two parents,

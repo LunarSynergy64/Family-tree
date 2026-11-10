@@ -434,7 +434,21 @@ function placeAncestor(placed, edges, id, excludeSpouseId, xLeft, width, gen, ex
     // child assumes they're a couple for this diagram by default, unless
     // explicitly marked otherwise (notPartnerWith, set from the Edit sheet).
     if(expand.length===2 && !(expand[0].notPartnerWith||[]).includes(expand[1].id)){
-      edges.push({tie:true, a:parentPos[0], b:parentPos[1], divorced:isDivorced(expand[0], expand[1])});
+      const divorced = isDivorced(expand[0], expand[1]);
+      const adj = adjacentX(parentPos[0].x, parentPos[1].x);
+      edges.push({tie:true, a:parentPos[0], b:parentPos[1], divorced: divorced && adj});
+      // each parent here is the pivot of their own, possibly-wide ancestor
+      // fork (siblings, an attached spouse of their own) - when they're
+      // not sitting right next to each other, that line runs straight
+      // behind whatever's filling the gap, so mark both of them directly
+      // instead (found by id since they were placed inside the recursive
+      // calls above, not pushed here).
+      if(divorced && !adj){
+        [expand[0].id, expand[1].id].forEach(id=>{
+          const n = placed.find(n=>n.id===id && n.gen===gen-1);
+          if(n) n.divorced = true;
+        });
+      }
     }
     // a suppressed co-parent is otherwise placed by the expanding parent's
     // own row below (either normally, as a registered spouse, or via

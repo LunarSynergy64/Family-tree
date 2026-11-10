@@ -100,11 +100,11 @@ let showMiddleNames = keyGet("ft-showmiddle")==="1";
    #app's native scrollbars stay correct at any zoom level - no coordinate
    math to redo, unlike the browser's own page zoom which scales everything
    including the header and dock). */
-let zoom = Math.min(1.5, Math.max(0.4, Number(keyGet("ft-zoom")) || 1));
+let zoom = Math.min(1.5, Math.max(0.25, Number(keyGet("ft-zoom")) || 1));
 function applyZoom(){ document.documentElement.style.setProperty("--zoom", zoom); }
 applyZoom();
 $("#zoomIn").addEventListener("click", () => { zoom = Math.min(1.5, +(zoom+0.15).toFixed(2)); applyZoom(); keySet("ft-zoom", zoom); });
-$("#zoomOut").addEventListener("click", () => { zoom = Math.max(0.4, +(zoom-0.15).toFixed(2)); applyZoom(); keySet("ft-zoom", zoom); });
+$("#zoomOut").addEventListener("click", () => { zoom = Math.max(0.25, +(zoom-0.15).toFixed(2)); applyZoom(); keySet("ft-zoom", zoom); });
 $("#zoomReset").addEventListener("click", () => { zoom = 1; applyZoom(); keySet("ft-zoom", zoom); });
 
 function showHome(){
@@ -842,9 +842,11 @@ function renderPedigree(){
 
   const xs = placed.map(n=>n.x), gens = placed.map(n=>n.gen);
   const minX = Math.min(...xs), maxX = Math.max(...xs), minGen = Math.min(...gens), maxGen = Math.max(...gens);
-  // PAD_Y leaves enough headroom above the topmost row for its own "more
-  // above" stub line (see renderEdges) to fit without being clipped.
-  const PAD_X = 70, PAD_Y = 78;
+  // Generous padding on every side, not just enough to fit the content -
+  // gives real room to grab the background and pan around (especially
+  // above the topmost row, which used to sit flush against the edge with
+  // nowhere to drag to) and keeps zooming out from feeling cramped.
+  const PAD_X = 220, PAD_Y = 220;
   const px = x => (x-minX)*SLOT_W + PAD_X;
   const py = g => (g-minGen)*ROW_H + PAD_Y;
   const width = (maxX-minX)*SLOT_W + PAD_X*2;

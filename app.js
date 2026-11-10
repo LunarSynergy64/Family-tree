@@ -83,7 +83,7 @@ let activeAnchor = null, currentAnchor = null;
 // the whole anchor feature exists to avoid. Reset whenever the active
 // anchor itself changes, so returning here later starts collapsed again.
 let revealedPast = new Set();
-let editCoParents = [];
+let editCoParents = [], editFormalSpouses = [];
 const app = $("#app");
 const P = id => people.get(id);
 if(keyGet("ft-colorgender")!=="0") app.classList.add("color-gender");
@@ -726,7 +726,7 @@ function openSheet(mode){
   setGender("");
   $("#delZone").hidden = true; $("#delConfirm").hidden = true; $("#delBtn").hidden = false;
   $("#otherWrap").hidden = true; $("#linkWrap").hidden = true; $("#pickWrap").hidden = true;
-  $("#coParentWrap").hidden = true; editCoParents = [];
+  $("#coParentWrap").hidden = true; editCoParents = []; editFormalSpouses = [];
   if(mode.edit){
     const p = P(mode.edit);
     $("#sheetTitle").textContent = p.placeholder ? "Who was this?" : "Edit details";
@@ -742,17 +742,31 @@ function openSheet(mode){
     $("#f-died-y").value=p.died??""; $("#f-died-m").value=p.diedMonth??""; $("#f-died-d").value=p.diedDay??"";
     $("#f-place").value=p.place||""; $("#f-note").value=p.note||"";
     $("#delZone").hidden = false;
-    const coParents = uniq(childrenOf(p.id).flatMap(k => (k.parents||[]).filter(id=>id!==p.id))).map(P).filter(Boolean);
-    if(coParents.length && !p.placeholder){
-      editCoParents = coParents.map(cp=>cp.id);
+    // Registered partners (added via +Partner, or "link as partner" when
+    // adding a parent) are a couple regardless of any shared child, so
+    // divorce applies to them directly - no "assumed by default" toggle,
+    // since nothing here is being assumed. Someone who's only a co-parent
+    // because they share a child (no formal partner link) still gets the
+    // original assumed-married/notPartnerWith toggle alongside it.
+    const formalSpouses = partnersOf(p).filter(s=>!s.placeholder);
+    const sharedKid = uniq(childrenOf(p.id).flatMap(k => (k.parents||[]).filter(id=>id!==p.id))).map(P).filter(Boolean);
+    const assumedOnly = sharedKid.filter(cp => !formalSpouses.some(fs=>fs.id===cp.id));
+    if((formalSpouses.length || assumedOnly.length) && !p.placeholder){
+      editCoParents = assumedOnly.map(cp=>cp.id);
+      editFormalSpouses = formalSpouses.map(sp=>sp.id);
       $("#coParentWrap").hidden = false;
-      $("#coParentList").innerHTML = coParents.map(cp => {
+      const spouseRows = formalSpouses.map(sp => `<div class="coParentRow">
+          <span class="nm">${esc(displayName(sp)||"Unnamed")}</span>
+          <label class="check sub"><input type="checkbox" data-divorced="${esc(sp.id)}" ${isDivorced(p,sp)?"checked":""}> Divorced</label>
+        </div>`).join("");
+      const coParentRows = assumedOnly.map(cp => {
         const partnered = !(p.notPartnerWith||[]).includes(cp.id);
         return `<div class="coParentRow">
           <label class="check"><input type="checkbox" data-coparent="${esc(cp.id)}" ${partnered?"checked":""}> ${esc(displayName(cp)||"Unnamed")}</label>
           <label class="check sub" data-divorcedwrap="${esc(cp.id)}" ${partnered?"":"hidden"}><input type="checkbox" data-divorced="${esc(cp.id)}" ${isDivorced(p,cp)?"checked":""}> Divorced</label>
         </div>`;
       }).join("");
+      $("#coParentList").innerHTML = spouseRows + coParentRows;
     }
   } else {
     const fname = f ? (f.name||"this person").split(/\s+/)[0] : "";
@@ -836,7 +850,7 @@ $("#sheetForm").addEventListener("submit", async e => {
       const partnered = new Set([...document.querySelectorAll('#coParentList input[data-coparent]:checked')].map(el=>el.dataset.coparent));
       const notPartnerWith = editCoParents.filter(id=>!partnered.has(id));
       const divorcedSet = new Set([...document.querySelectorAll('#coParentList input[data-divorced]:checked')].map(el=>el.dataset.divorced));
-      const divorced = editCoParents.filter(id=>divorcedSet.has(id));
+      const divorced = uniq([...editCoParents, ...editFormalSpouses]).filter(id=>divorcedSet.has(id));
       await put({...p, ...fields, notPartnerWith, divorced});
       for(const cpId of editCoParents){
         const cp = P(cpId); if(!cp) continue;
@@ -845,6 +859,12 @@ $("#sheetForm").addEventListener("submit", async e => {
         const curDivorced = new Set(cp.divorced||[]);
         if(divorcedSet.has(cpId)) curDivorced.add(p.id); else curDivorced.delete(p.id);
         await put({...cp, notPartnerWith:[...cur], divorced:[...curDivorced]});
+      }
+      for(const spId of editFormalSpouses){
+        const sp = P(spId); if(!sp) continue;
+        const curDivorced = new Set(sp.divorced||[]);
+        if(divorcedSet.has(spId)) curDivorced.add(p.id); else curDivorced.delete(p.id);
+        await put({...sp, divorced:[...curDivorced]});
       }
     } else {
       const rel = sheetMode.rel, f = P(focusId);

@@ -795,9 +795,16 @@ function bubbleHtml(n, x, y){
       ? `<span class="collapseIcon" data-collapse="${esc(n.id)}" title="Peeking - tap to turn off collapsing for good">⊞</span>`
       : `<span class="collapseIcon" data-collapse="${esc(n.id)}" title="Collapse this branch">⊟</span>`)
     : "";
+  // Naming both of them specifically (rather than a generic "their
+  // partner") is what actually answers the question on hover, without
+  // needing to tap anything first.
+  const uncertainPartner = p.parentsUncertain ? partnersOf(p)[0] : null;
+  const uncertainBadge = (p.parentsUncertain && uncertainPartner)
+    ? ` <span class="uncertainBadge" data-resolve="${esc(p.id)}" title="${esc(`Not sure if these are ${displayName(p)||"their"}'s parents or ${displayName(uncertainPartner)||"their partner"}'s - tap to say for sure`)}">?</span>`
+    : "";
   return `<button class="node${n.dim?" dim":""}${n.id===focusId?" me":""}${more?" more":""}${genderCls}" style="left:${x}px;top:${y}px" data-go="${esc(n.id)}">
     ${collapseIcon}
-    <span class="nm">${esc(displayName(p)||"Unnamed")}${isAnchor(p)?` <span class="anchorBadge" title="Anchor point">⚓</span>`:""}${n.divorced?` <span class="divorcedBadge" title="Divorced">✕</span>`:""}${p.parentsUncertain?` <span class="uncertainBadge" title="Might be their partner's parents instead - unclear which of them is the blood child">?</span>`:""}</span>
+    <span class="nm">${esc(displayName(p)||"Unnamed")}${isAnchor(p)?` <span class="anchorBadge" title="Anchor point">⚓</span>`:""}${n.divorced?` <span class="divorcedBadge" title="Divorced">✕</span>`:""}${uncertainBadge}</span>
     ${p.maidenName?`<span class="maiden">(${esc(p.maidenName)})</span>`:""}
     <span class="yrs${birthKnown(p)?"":" unk"}">${esc(birthLabel(p))}</span>
     ${n.half?`<span class="chip">half</span>`:""}
@@ -1098,6 +1105,41 @@ $("#f-branchname").addEventListener("change", async e => {
   }
 });
 
+let resolvePersonId = null;
+function openResolveSheet(id){
+  const p = P(id); if(!p || !p.parentsUncertain) return;
+  const partner = partnersOf(p)[0]; if(!partner) return;
+  resolvePersonId = id;
+  $("#resolveA").textContent = `${displayName(p)||"This person"}'s parents`;
+  $("#resolveB").textContent = `${displayName(partner)||"Their partner"}'s parents`;
+  $("#resolveParents").hidden = false;
+}
+$("#resolveA").addEventListener("click", async () => {
+  const p = P(resolvePersonId); if(!p) return;
+  const ok = await put({...p, parentsUncertain:false});
+  if(ok){
+    $("#resolveParents").hidden = true;
+    toast(`Confirmed - ${displayName(p)||"their"}'s parents.`);
+    setFocus(focusId); render();
+  }
+});
+$("#resolveB").addEventListener("click", async () => {
+  const p = P(resolvePersonId); if(!p) return;
+  const partner = partnersOf(p)[0]; if(!partner) return;
+  const parents = (p.parents||[]).slice(0,2);
+  // The pair moves to the partner entirely - leaving it on both would
+  // make them look like blood siblings married to each other instead of
+  // spouses, which is exactly the mix-up marking it uncertain was meant
+  // to avoid.
+  const ok1 = await put({...partner, parents, parentsUncertain:false});
+  const ok2 = await put({...p, parents:[], parentsUncertain:false});
+  if(ok1 && ok2){
+    $("#resolveParents").hidden = true;
+    toast(`Confirmed - ${displayName(partner)||"their partner"}'s parents.`);
+    setFocus(focusId); render();
+  }
+});
+
 $("#f-existing").addEventListener("change", e => $("#sheetForm").classList.toggle("picking", !!e.target.value));
 $("#coParentList").addEventListener("change", e => {
   const cb = e.target.closest("input[data-coparent]"); if(!cb) return;
@@ -1310,6 +1352,10 @@ document.addEventListener("click", e => {
     }
     return;
   }
+  // The uncertain-parents "?" sits inside a [data-go] node button too -
+  // same reason as the collapse icon above, has to be checked first.
+  const rv = e.target.closest("[data-resolve]");
+  if(rv) return openResolveSheet(rv.dataset.resolve);
   // A collapsed box (manual or auto-by-zoom) stands in for that whole
   // person - tapping it just opens it back up for this session, same as
   // the anchor reveal below, rather than navigating focus onto them.
@@ -1340,6 +1386,7 @@ document.addEventListener("click", e => {
   if(e.target.closest("[data-close]")) return closeSheet();
   if(e.target.closest("[data-closemenu]")) $("#menu").hidden = true;
   if(e.target.closest("[data-closeoptions]")) $("#personOptions").hidden = true;
+  if(e.target.closest("[data-closeresolve]")) $("#resolveParents").hidden = true;
 });
 document.addEventListener("keydown", e => { if(e.key==="Escape"){ closeSheet(); $("#menu").hidden = true; } });
 app.addEventListener("input", e => { if(e.target.id==="q"){ query=e.target.value; render(); } });

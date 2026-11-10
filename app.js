@@ -83,6 +83,11 @@ let activeAnchor = null, currentAnchor = null;
 // the whole anchor feature exists to avoid. Reset whenever the active
 // anchor itself changes, so returning here later starts collapsed again.
 let revealedPast = new Set();
+// A branch someone's marked "collapsed" (see openPersonOptions) renders as
+// one named box instead of that person plus their whole recursive ancestor
+// fan - this tracks which collapsed boxes got tapped open this session,
+// same lifetime/reset rules as revealedPast above.
+let expandedBranches = new Set();
 let editCoParents = [], editFormalSpouses = [];
 const app = $("#app");
 const P = id => people.get(id);
@@ -237,6 +242,8 @@ async function put(p){
   if(p.placeholder && !data.name) data.placeholder = true;
   if(p.anchor) data.anchor = true;
   if(p.parentsUncertain) data.parentsUncertain = true;
+  if(p.collapsed) data.collapsed = true;
+  if(p.branchName) data.branchName = p.branchName;
   people.set(p.id, {id:p.id, ...data});
   try { await setDoc(doc(fs, "trees", tree.key, "people", p.id), data); return true; }
   catch(e){ toast("That change didn't save (" + (e.code||"error") + "). Try again."); return false; }
@@ -305,7 +312,7 @@ function setFocus(id){
   if(!P(id)) return;
   const reachable = reachableAnchors(id);
   const nextAnchor = (activeAnchor && reachable.has(activeAnchor)) ? activeAnchor : (reachable.size ? firstReachableAnchor(id) : null);
-  if(nextAnchor !== activeAnchor) revealedPast = new Set();
+  if(nextAnchor !== activeAnchor){ revealedPast = new Set(); expandedBranches = new Set(); }
   activeAnchor = nextAnchor;
   focusId = id;
   if(tree) keySet("ft-anchor-" + tree.key, activeAnchor || "");
@@ -351,6 +358,12 @@ const SLOT_W = 124, ROW_H = 148;
    other side becomes a tap-to-explore dead end, exactly like a spouse -
    tapping it switches the active anchor to their own side instead. */
 const isAnchor = p => !!p && (p.anchor===true || (tree && tree.defaultFocus===p.id));
+// A branch marked "collapsed" (see openPersonOptions) renders as one named
+// box standing in for that person AND their whole recursive ancestor fan -
+// independent of anchor status, and undone (for this session) by tapping
+// the box, same spirit as an anchor's one-generation-at-a-time reveal but
+// a full open/close toggle for the one person rather than a climb.
+const isCollapsedHidden = p => !!(p && p.collapsed && !expandedBranches.has(p.id));
 const isDivorced = (a, b) => !!(a && b && ((a.divorced||[]).includes(b.id) || (b.divorced||[]).includes(a.id)));
 // A divorced couple sitting right next to each other reads fine with the
 // X drawn over their connecting line - that's only confusing when another
@@ -409,13 +422,20 @@ function splitParents(parents){
 
 function ancWidth(id, excludeSpouseId, extraPartnerId){
   const p = P(id);
+  const collapsedHidden = isCollapsedHidden(p);
   const sibs = siblingsOf(p).map(s=>s.p);
   const folks = [p, ...sibs];
-  const rowWidth = folks.reduce((sum,f)=> sum + 1 + partnersOf(f).filter(s=>!(f.id===p.id && s.id===excludeSpouseId)).length + ((f.id===p.id && extraPartnerId)?1:0), 0);
+  // a collapsed-and-unopened pivot takes exactly one slot - their partner(s)
+  // are folded into that same box rather than drawn alongside it.
+  const rowWidth = folks.reduce((sum,f)=> {
+    if(f.id===p.id && collapsedHidden) return sum+1;
+    return sum + 1 + partnersOf(f).filter(s=>!(f.id===p.id && s.id===excludeSpouseId)).length + ((f.id===p.id && extraPartnerId)?1:0);
+  }, 0);
   // an anchor is a hard stop by default - never recurse past one into its
   // own parents, even if it happens to have some recorded - unless it's
-  // been explicitly revealed (see isBlocked/revealedPast).
-  const {expand, suppressed} = isBlocked(p) ? {expand:[], suppressed:null} : splitParents(parentsOf(p));
+  // been explicitly revealed (see isBlocked/revealedPast). A collapsed,
+  // unopened branch is the same kind of stop, regardless of anchor status.
+  const {expand, suppressed} = (isBlocked(p) || collapsedHidden) ? {expand:[], suppressed:null} : splitParents(parentsOf(p));
   // a suppressed co-parent who IS already a registered spouse gets placed
   // by the expanding parent's own row, like any other partner - only a
   // suppressed co-parent with no spouse record of their own needs this
@@ -437,10 +457,11 @@ function descWidth(id){
   return Math.max(rowWidth, downWidth, 1);
 }
 
-function placeAncestor(placed, edges, id, excludeSpouseId, xLeft, width, gen, extraPartnerId){
+function placeAncestor(placed, edges, id, excludeSpouseId, xLeft, width, gen, extraPartnerId, pinSide){
   const p = P(id);
+  const collapsedHidden = isCollapsedHidden(p);
   const parents = parentsOf(p);
-  const {expand, suppressed} = isBlocked(p) ? {expand:[], suppressed:null} : splitParents(parents);
+  const {expand, suppressed} = (isBlocked(p) || collapsedHidden) ? {expand:[], suppressed:null} : splitParents(parents);
   const parentPos = [];
   if(expand.length){
     // same reserved-extra-unit rule as ancWidth: only a suppressed
@@ -452,8 +473,14 @@ function placeAncestor(placed, edges, id, excludeSpouseId, xLeft, width, gen, ex
     const widths = expand.map((par,i)=>ancWidth(par.id, excludeFor(i), extraFor(i)));
     const totalW = widths.reduce((a,b)=>a+b,0);
     let px = xLeft + (width-totalW)/2;
+    // When both parents each get their own independent ancestor fork, that
+    // parent's own siblings share its block - without pinning, the sibling
+    // sort (by birth) can freely land a sibling between the two parents,
+    // who are supposed to be a couple. Pin each parent to the block edge
+    // that faces the other, so siblings only ever fan out away from them.
     expand.forEach((par,i)=>{
-      parentPos.push(placeAncestor(placed, edges, par.id, excludeFor(i), px, widths[i], gen-1, extraFor(i)));
+      const pin = expand.length===2 ? (i===0 ? "right" : "left") : null;
+      parentPos.push(placeAncestor(placed, edges, par.id, excludeFor(i), px, widths[i], gen-1, extraFor(i), pin));
       px += widths[i];
     });
     // when both parents are each their own blood ancestor fork (both have
@@ -483,9 +510,17 @@ function placeAncestor(placed, edges, id, excludeSpouseId, xLeft, width, gen, ex
     // extraPartnerId right above) - nothing left to do here.
   }
   const sibs = siblingsOf(p);
-  const folks = [{person:p, half:false, isPivot:true}, ...sibs.map(s=>({person:s.p, half:s.half, isPivot:false}))]
+  let folks = [{person:p, half:false, isPivot:true}, ...sibs.map(s=>({person:s.p, half:s.half, isPivot:false}))]
     .sort((a,b)=>byBorn(a.person,b.person));
-  const rowWidth = folks.reduce((sum,f)=> sum + 1 + partnersOf(f.person).filter(s=>!(f.isPivot && s.id===excludeSpouseId)).length + ((f.isPivot && extraPartnerId)?1:0), 0);
+  if(pinSide){
+    const pivotFolk = folks.find(f=>f.isPivot);
+    const others = folks.filter(f=>!f.isPivot);
+    folks = pinSide==="right" ? [...others, pivotFolk] : [pivotFolk, ...others];
+  }
+  const rowWidth = folks.reduce((sum,f)=> {
+    if(f.isPivot && collapsedHidden) return sum+1;
+    return sum + 1 + partnersOf(f.person).filter(s=>!(f.isPivot && s.id===excludeSpouseId)).length + ((f.isPivot && extraPartnerId)?1:0);
+  }, 0);
   // Centering this row purely within the space handed down from the child
   // below breaks once the pivot has many siblings: the pivot's own spot
   // inside that wide sibling row depends on sort order, not the row's
@@ -494,7 +529,13 @@ function placeAncestor(placed, edges, id, excludeSpouseId, xLeft, width, gen, ex
   // parents' own actual position instead (clamped to the space we were
   // given, so sibling forks still never overlap each other).
   let cursor;
-  if(parentPos.length){
+  if(pinSide){
+    // Pinned to the edge facing an independently-forking co-parent (see
+    // above) - hug that edge exactly, rather than centering on this
+    // pivot's own further-up ancestors, so the couple stays adjacent even
+    // when one side's upward fan is wider than its own sibling row.
+    cursor = pinSide==="right" ? xLeft+width-rowWidth : xLeft;
+  } else if(parentPos.length){
     const parentCenter = parentPos.reduce((s,pp)=>s+pp.x,0)/parentPos.length;
     cursor = Math.max(xLeft, Math.min(xLeft+width-rowWidth, parentCenter-rowWidth/2));
   } else {
@@ -504,14 +545,15 @@ function placeAncestor(placed, edges, id, excludeSpouseId, xLeft, width, gen, ex
   let pivotPos = null;
   folks.forEach(f=>{
     const person = f.person;
-    const partners = partnersOf(person).filter(s=>!(f.isPivot && s.id===excludeSpouseId));
-    const extra = (f.isPivot && extraPartnerId) ? P(extraPartnerId) : null;
+    const folkCollapsed = f.isPivot && collapsedHidden;
+    const partners = folkCollapsed ? [] : partnersOf(person).filter(s=>!(f.isPivot && s.id===excludeSpouseId));
+    const extra = (f.isPivot && extraPartnerId && !folkCollapsed) ? P(extraPartnerId) : null;
     const unitIds = sortIdsByGender([person.id, ...partners.map(s=>s.id), ...(extra?[extra.id]:[])]);
     const posOf = {};
     unitIds.forEach(uid => { posOf[uid] = cursor+0.5; cursor++; });
 
     const x = posOf[person.id];
-    placed.push({id:person.id, x, gen, half:f.half, placeholder:!!person.placeholder, deadEnd:!f.isPivot});
+    placed.push({id:person.id, x, gen, half:f.half, placeholder:!!person.placeholder, deadEnd:!f.isPivot, collapsedBox:folkCollapsed});
     if(f.isPivot) pivotPos = {x, gen};
 
     const myParents = person.parents||[];
@@ -663,6 +705,10 @@ function renderEdges(edges, px, py){
 function bubbleHtml(n, x, y){
   const p = P(n.id); if(!p) return "";
   if(p.placeholder) return `<button class="node ph" style="left:${x}px;top:${y}px" data-go="${esc(n.id)}">Unknown</button>`;
+  if(n.collapsedBox) return `<button class="node collapsedNode" style="left:${x}px;top:${y}px" data-go="${esc(n.id)}">
+    <span class="nm">${esc(p.branchName || "Family branch")}</span>
+    <span class="yrs">Tap to expand</span>
+  </button>`;
   const more = (n.deadEnd && (parentsOf(p).length || childrenOf(p.id).length)) || (isBlocked(p) && parentsOf(p).length>0);
   const genderCls = p.gender==="m" ? " g-m" : p.gender==="f" ? " g-f" : "";
   return `<button class="node${n.dim?" dim":""}${n.id===focusId?" me":""}${more?" more":""}${genderCls}" style="left:${x}px;top:${y}px" data-go="${esc(n.id)}">
@@ -918,6 +964,14 @@ function openPersonOptions(id){
   $("#optAnchorHint").textContent = isDefault
     ? "This is the tree's starting point, so it's always an anchor."
     : "Ancestors stop expanding automatically once they reach an anchor — tap it to explore further back instead.";
+  // Collapsing only makes sense once there's actually a branch above them
+  // to hide - nothing to fold away for someone with no recorded parents.
+  const canCollapse = parentsOf(p).length>0;
+  $("#optCollapseWrap").hidden = !canCollapse;
+  $("#optCollapseHint").hidden = !canCollapse;
+  $("#optCollapse").checked = !!p.collapsed;
+  $("#branchNameWrap").hidden = !p.collapsed;
+  $("#f-branchname").value = p.branchName || "";
   $("#personOptions").hidden = false;
 }
 $("#optAnchor").addEventListener("change", async e => {
@@ -925,6 +979,32 @@ $("#optAnchor").addEventListener("change", async e => {
   const ok = await put({...p, anchor: e.target.checked});
   if(ok){
     toast(e.target.checked ? `${displayName(p)||"This person"} is now an anchor point.` : `${displayName(p)||"This person"} is no longer an anchor point.`);
+    setFocus(focusId); render();
+  }
+});
+$("#optCollapse").addEventListener("change", async e => {
+  const p = P(optionsPersonId); if(!p) return;
+  const checked = e.target.checked;
+  $("#branchNameWrap").hidden = !checked;
+  if(checked){
+    $("#f-branchname").value = p.branchName || "";
+    setTimeout(()=>$("#f-branchname").focus(), 50);
+    return;
+  }
+  const ok = await put({...p, collapsed:false});
+  if(ok){
+    expandedBranches.delete(p.id);
+    toast(`${displayName(p)||"This person"}'s branch is expanded again.`);
+    setFocus(focusId); render();
+  }
+});
+$("#f-branchname").addEventListener("change", async e => {
+  const p = P(optionsPersonId); if(!p) return;
+  const name = e.target.value.trim();
+  if(!name){ toast("Give the branch a name."); return; }
+  const ok = await put({...p, collapsed:true, branchName:name});
+  if(ok){
+    toast(`Collapsed as "${name}".`);
     setFocus(focusId); render();
   }
 });
@@ -1119,6 +1199,13 @@ document.addEventListener("click", e => {
   if(g){
     const id = g.dataset.go, p = P(id);
     if(p && p.placeholder) return openSheet({edit:id});
+    // A collapsed branch's box stands in for that whole person - tapping it
+    // just opens it back up for this session, same as the anchor reveal
+    // below, rather than navigating focus onto them.
+    if(p && isCollapsedHidden(p)){
+      expandedBranches.add(id);
+      return render();
+    }
     // an anchor (or someone just revealed as one's parent) with its own
     // parents on record isn't a dead end - tapping it reveals them, one
     // generation at a time, instead of collapsing the view onto them.

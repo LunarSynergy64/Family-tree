@@ -7,7 +7,7 @@
 <title>Our Family Tree</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Alegreya:wght@500;700&family=Alegreya+Sans:wght@400;500;700&display=swap">
-<link rel="stylesheet" href="style.css?v=3">
+<link rel="stylesheet" href="style.css?v=4">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%232f5d50'/%3E%3Cpath d='M16 26V14M16 18l-6-5M16 16l6-5' stroke='%23fff' stroke-width='2.5' stroke-linecap='round' fill='none'/%3E%3Ccircle cx='10' cy='12' r='3' fill='%23fff'/%3E%3Ccircle cx='22' cy='10' r='3' fill='%23fff'/%3E%3Ccircle cx='16' cy='9' r='3' fill='%23fff'/%3E%3C/svg%3E">
 </head>
 <body>
@@ -148,6 +148,9 @@
     <h3 id="personOptionsTitle">Options</h3>
     <label class="check"><input type="checkbox" id="optAnchor"> Anchor point</label>
     <p class="hint" id="optAnchorHint">Ancestors stop expanding automatically once they reach an anchor — tap it to explore further back instead.</p>
+    <label class="check" id="optCollapseWrap" hidden><input type="checkbox" id="optCollapse"> Collapse this branch</label>
+    <label id="branchNameWrap" hidden>Branch name <input id="f-branchname" placeholder="e.g. The Smiths" maxlength="60"></label>
+    <p class="hint" id="optCollapseHint" hidden>Hides everyone above them behind one named box you can tap to peek into - handy for a distant line you don't need to see by default.</p>
     <div class="actions"><button type="button" class="ghost" data-closeoptions>Close</button></div>
   </div>
 </div>
@@ -173,6 +176,6 @@
 </div>
 
 <div class="toast" id="toast" hidden></div>
-<script type="module" src="app.js?v=14"></script>
+<script type="module" src="app.js?v=15"></script>
 </body>
 </html>

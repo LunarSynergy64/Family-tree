@@ -83,6 +83,8 @@ main{max-width:1400px;margin:0 auto;padding:18px var(--gutter-r) calc(48px + env
 .node.dim{opacity:.68;border-style:dashed;background:transparent}
 .node.more::after{content:"⋯";color:var(--accent);font-size:.78rem;line-height:1;margin-top:1px}
 .node.ph{opacity:.6;border-style:dotted;font-style:italic;color:var(--muted);width:auto;padding:9px 14px}
+.node.collapsedNode{background:var(--accent-soft);border-style:dashed;border-width:2px}
+.node.collapsedNode .nm{font-weight:700}
 #app.color-gender .node.g-m{border-color:var(--male)}
 #app.color-gender .node.g-f{border-color:var(--female)}
 #app.color-gender .node.me.g-m{border-color:var(--male)}

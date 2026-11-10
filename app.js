@@ -324,6 +324,12 @@ const SLOT_W = 124, ROW_H = 148;
    tapping it switches the active anchor to their own side instead. */
 const isAnchor = p => !!p && (p.anchor===true || (tree && tree.defaultFocus===p.id));
 const isDivorced = (a, b) => !!(a && b && ((a.divorced||[]).includes(b.id) || (b.divorced||[]).includes(a.id)));
+// A divorced couple sitting right next to each other reads fine with the
+// X drawn over their connecting line - that's only confusing when another
+// partner sits between them, since the line to a non-adjacent partner
+// runs straight behind that in-between node. So: X on the line when
+// adjacent, X on the ex-partner's own node otherwise.
+const adjacentX = (ax, bx) => Math.abs(ax-bx)===1;
 function reachableAnchors(id, visited){
   visited = visited || new Set();
   const result = new Set();
@@ -475,13 +481,15 @@ function placeAncestor(placed, edges, id, excludeSpouseId, xLeft, width, gen, ex
 
     partners.forEach(sp=>{
       const sx = posOf[sp.id];
-      placed.push({id:sp.id, x:sx, gen, dim:true, placeholder:!!sp.placeholder, deadEnd:true, divorced:isDivorced(person, sp)});
-      edges.push({tie:true, a:{x, gen}, b:{x:sx, gen}});
+      const divorced = isDivorced(person, sp), adj = adjacentX(x, sx);
+      placed.push({id:sp.id, x:sx, gen, dim:true, placeholder:!!sp.placeholder, deadEnd:true, divorced: divorced && !adj});
+      edges.push({tie:true, a:{x, gen}, b:{x:sx, gen}, divorced: divorced && adj});
     });
     if(extra){
       const sx = posOf[extra.id];
-      placed.push({id:extra.id, x:sx, gen, dim:true, placeholder:!!extra.placeholder, deadEnd:true, divorced:isDivorced(person, extra)});
-      edges.push({tie:true, a:{x, gen}, b:{x:sx, gen}});
+      const divorced = isDivorced(person, extra), adj = adjacentX(x, sx);
+      placed.push({id:extra.id, x:sx, gen, dim:true, placeholder:!!extra.placeholder, deadEnd:true, divorced: divorced && !adj});
+      edges.push({tie:true, a:{x, gen}, b:{x:sx, gen}, divorced: divorced && adj});
     }
   });
   return pivotPos;
@@ -505,8 +513,9 @@ function placeDescendant(placed, edges, id, xLeft, width, gen){
   const spouseX = new Map();
   partners.forEach(sp=>{
     const sx = posOf[sp.id];
-    placed.push({id:sp.id, x:sx, gen, dim:true, placeholder:!!sp.placeholder, deadEnd:true, divorced:isDivorced(p, sp)});
-    edges.push({tie:true, a:{x, gen}, b:{x:sx, gen}});
+    const divorced = isDivorced(p, sp), adj = adjacentX(x, sx);
+    placed.push({id:sp.id, x:sx, gen, dim:true, placeholder:!!sp.placeholder, deadEnd:true, divorced: divorced && !adj});
+    edges.push({tie:true, a:{x, gen}, b:{x:sx, gen}, divorced: divorced && adj});
     spouseX.set(sp.id, sx);
   });
 

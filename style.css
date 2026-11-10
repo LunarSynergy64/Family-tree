@@ -14,8 +14,15 @@
   --male:#89aee2; --female:#e28bc0; color-scheme:dark}}
 *{box-sizing:border-box}
 [hidden]{display:none!important}
-html,body{background:var(--paper);margin:0}
+html,body{background:var(--paper);margin:0;height:100%;overflow:hidden}
 body{color:var(--ink);font-family:var(--body);font-size:16px;line-height:1.45;-webkit-text-size-adjust:100%}
+/* Each screen owns its own scrolling instead of the page - needed so the
+   tree view's #app can be a real bounded box to pan and scroll within
+   (see below), rather than one that just grows to fit its content with
+   nothing to drag against. */
+.screen{height:100vh;height:100dvh}
+#home{overflow-y:auto;-webkit-overflow-scrolling:touch}
+#treeScreen{display:flex;flex-direction:column;overflow:hidden}
 button,input,select,textarea{font:inherit;color:inherit}
 button{cursor:pointer}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
@@ -60,7 +67,7 @@ main{max-width:1400px;margin:0 auto;padding:18px var(--gutter-r) calc(48px + env
 .hint{font-size:.88rem;color:var(--muted);margin:0}
 
 /* ---- pedigree grid: exact-coordinate generation rows ---- */
-#app{overflow:auto}
+#app{overflow:auto;flex:1;min-height:0;-webkit-overflow-scrolling:touch}
 .pedigree{position:relative;padding-bottom:170px;margin:0 auto;cursor:grab;zoom:var(--zoom,1)}
 .zoomCtl{position:fixed;right:var(--gutter-r);bottom:calc(150px + env(safe-area-inset-bottom,0px));z-index:6;display:flex;flex-direction:column;gap:6px}
 .zoomCtl button{width:36px;height:36px;border-radius:999px;border:1px solid var(--line);background:var(--card);font-size:1.1rem;line-height:1;display:grid;place-items:center;box-shadow:0 1px 4px rgb(0 0 0 / .18)}

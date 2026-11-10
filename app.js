@@ -1280,6 +1280,16 @@ app.addEventListener("mousedown", e => {
   document.addEventListener("mousemove", onPanMove);
   document.addEventListener("mouseup", onPanEnd);
 });
+// Scrolling the wheel (or a trackpad's vertical swipe) zooms instead of
+// panning the page - panning already has the click-drag gesture above
+// plus native touch-scroll, so the wheel is free to repurpose, same as
+// most map-style canvases.
+app.addEventListener("wheel", e => {
+  if(view!=="tree" || e.target.closest(".dock")) return;
+  e.preventDefault();
+  zoom = Math.min(1.5, Math.max(0.25, +(zoom + (e.deltaY<0?0.08:-0.08)).toFixed(2)));
+  applyZoom(); keySet("ft-zoom", zoom); render();
+}, {passive:false});
 
 /* ================= events ================= */
 document.addEventListener("click", e => {

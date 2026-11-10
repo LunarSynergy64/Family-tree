@@ -209,6 +209,16 @@ function surname(p){
   const w = (p.name||"").trim().split(/\s+/);
   return w.length>1 ? w[w.length-1] : (w[0]||"Unnamed");
 }
+// A couple's recorded parents are sometimes only known for the couple as a
+// whole, not for which spouse is the actual blood child - that uncertainty
+// is stored on whichever one ended up holding the `parents` array
+// (p.parentsUncertain). While it's unresolved, don't offer a second,
+// separate +Parent for their partner too - the same uncertain pair already
+// covers them, and setting a different pair there would just contradict it.
+function openParentSlot(p){
+  if((p.parents||[]).length>=2) return false;
+  return !partnersOf(p).some(sp=>sp.parentsUncertain && (sp.parents||[]).length);
+}
 
 /* ================= saving ================= */
 const toYear = v => { const n = parseInt(v,10); return Number.isFinite(n) ? n : null; };
@@ -226,6 +236,7 @@ async function put(p){
   };
   if(p.placeholder && !data.name) data.placeholder = true;
   if(p.anchor) data.anchor = true;
+  if(p.parentsUncertain) data.parentsUncertain = true;
   people.set(p.id, {id:p.id, ...data});
   try { await setDoc(doc(fs, "trees", tree.key, "people", p.id), data); return true; }
   catch(e){ toast("That change didn't save (" + (e.code||"error") + "). Try again."); return false; }
@@ -508,7 +519,15 @@ function placeAncestor(placed, edges, id, excludeSpouseId, xLeft, width, gen, ex
     // these two parents are each their own independently-placed ancestor
     // fork, so they may not sit next to each other - never collapse them
     // to a single midpoint trunk (adjacent:false forces a stub per parent).
-    if(connected.length) edges.push({childX:x, childGen:gen, parents:connected, adjacent:false});
+    if(connected.length){
+      // When it's not clear whether `person` or their partner is the one
+      // actually descended from these parents, land the connector between
+      // the two of them instead of squarely on `person` - the line
+      // shouldn't claim more certainty than is actually known.
+      const uncertain = !!person.parentsUncertain;
+      const childX = uncertain && partners.length ? [x, ...partners.map(sp=>posOf[sp.id])].reduce((a,b)=>a+b,0)/(partners.length+1) : x;
+      edges.push({childX, childGen:gen, parents:connected, adjacent:false, uncertain});
+    }
 
     partners.forEach(sp=>{
       const sx = posOf[sp.id];
@@ -571,7 +590,16 @@ function placeDescendant(placed, edges, id, xLeft, width, gen){
       // between them (looking like a third parent), so fall back to a
       // stub per parent in that case, same as independently-forked ones.
       const adjacent = parentPts.length<2 || adjacentX(parentPts[0].x, parentPts[1].x);
-      edges.push({childX:kpos.x, childGen:kpos.gen, parents:parentPts, adjacent});
+      // Same "don't overclaim" rule as the ancestor direction: when it's
+      // unclear whether this child or their own spouse is the actual blood
+      // descendant, land the connector between the two of them.
+      const uncertain = !!kp.parentsUncertain;
+      let childX = kpos.x;
+      if(uncertain){
+        const partnerXs = partnersOf(kp).map(sp=>{ const n = placed.find(pn=>pn.id===sp.id && pn.gen===kpos.gen); return n ? n.x : null; }).filter(v=>v!=null);
+        if(partnerXs.length) childX = [kpos.x, ...partnerXs].reduce((a,b)=>a+b,0)/(partnerXs.length+1);
+      }
+      edges.push({childX, childGen:kpos.gen, parents:parentPts, adjacent, uncertain});
       cx += widths[i];
     });
   }
@@ -597,7 +625,7 @@ function renderEdges(edges, px, py){
     }
     const key = e.parents.map(p=>p.x+","+p.gen).sort().join("|");
     if(!groups.has(key)) groups.set(key, {parents:e.parents, children:[], adjacent:e.adjacent});
-    groups.get(key).children.push({x:e.childX, gen:e.childGen});
+    groups.get(key).children.push({x:e.childX, gen:e.childGen, uncertain:e.uncertain});
   });
   groups.forEach(g=>{
     const parentY = py(g.parents[0].gen);
@@ -621,7 +649,12 @@ function renderEdges(edges, px, py){
     });
     if(maxX>minX) svg += `<line x1="${minX.toFixed(1)}" y1="${busY.toFixed(1)}" x2="${maxX.toFixed(1)}" y2="${busY.toFixed(1)}" class="fam-line"/>`;
     g.children.forEach((c,i)=>{
-      svg += `<line x1="${childPx[i].toFixed(1)}" y1="${busY.toFixed(1)}" x2="${childPx[i].toFixed(1)}" y2="${py(c.gen).toFixed(1)}" class="fam-line"/>`;
+      const cls = c.uncertain ? "fam-line uncertain" : "fam-line";
+      const cy = py(c.gen);
+      svg += `<line x1="${childPx[i].toFixed(1)}" y1="${busY.toFixed(1)}" x2="${childPx[i].toFixed(1)}" y2="${cy.toFixed(1)}" class="${cls}"/>`;
+      // a dashed line alone reads as "incomplete data" rather than "unsure
+      // whose child" - the "?" is what actually says that.
+      if(c.uncertain) svg += `<text x="${childPx[i].toFixed(1)}" y="${((busY+cy)/2+4).toFixed(1)}" class="uncertain-q" text-anchor="middle">?</text>`;
     });
   });
   return svg;
@@ -633,7 +666,7 @@ function bubbleHtml(n, x, y){
   const more = (n.deadEnd && (parentsOf(p).length || childrenOf(p.id).length)) || (isBlocked(p) && parentsOf(p).length>0);
   const genderCls = p.gender==="m" ? " g-m" : p.gender==="f" ? " g-f" : "";
   return `<button class="node${n.dim?" dim":""}${n.id===focusId?" me":""}${more?" more":""}${genderCls}" style="left:${x}px;top:${y}px" data-go="${esc(n.id)}">
-    <span class="nm">${esc(displayName(p)||"Unnamed")}${isAnchor(p)?` <span class="anchorBadge" title="Anchor point">⚓</span>`:""}${n.divorced?` <span class="divorcedBadge" title="Divorced">✕</span>`:""}</span>
+    <span class="nm">${esc(displayName(p)||"Unnamed")}${isAnchor(p)?` <span class="anchorBadge" title="Anchor point">⚓</span>`:""}${n.divorced?` <span class="divorcedBadge" title="Divorced">✕</span>`:""}${p.parentsUncertain?` <span class="uncertainBadge" title="Might be their partner's parents instead - unclear which of them is the blood child">?</span>`:""}</span>
     ${p.maidenName?`<span class="maiden">(${esc(p.maidenName)})</span>`:""}
     <span class="yrs${birthKnown(p)?"":" unk"}">${esc(birthLabel(p))}</span>
     ${n.half?`<span class="chip">half</span>`:""}
@@ -646,7 +679,7 @@ function dockHtml(f, otherAnchors){
   return `<div class="dock">
     <div class="dockInfo"><strong>${esc(displayName(f)||"Unnamed")}</strong>${isAnchor(f)?` <span class="anchorBadge" title="Anchor point">⚓</span>`:""}${years(f)?` <span class="yrs">${esc(years(f))}</span>`:""}${f.maidenName?`<div class="maiden">(${esc(f.maidenName)})</div>`:""}${f.place?`<div class="place">${esc(f.place)}</div>`:""}${hint}</div>
     <div class="dockBtns">
-      ${(f.parents||[]).length<2?`<button class="dbtn" data-add="parent">+ Parent</button>`:""}
+      ${openParentSlot(f)?`<button class="dbtn" data-add="parent">+ Parent</button>`:""}
       <button class="dbtn" data-add="partner">+ Partner</button>
       <button class="dbtn" data-add="child">+ Child</button>
       <button class="dbtn" data-add="sibling">+ Sibling</button>
@@ -691,7 +724,14 @@ function renderPedigree(){
       // same reasoning as the matching spot in placeDescendant - only
       // trunk the two parents together when they're actually adjacent.
       const adjacent = parentPts.length<2 || adjacentX(parentPts[0].x, parentPts[1].x);
-      edges.push({childX:kpos.x, childGen:kpos.gen, parents:parentPts, adjacent});
+      // same "don't overclaim" rule as placeDescendant/placeAncestor.
+      const uncertain = !!kp.parentsUncertain;
+      let childX = kpos.x;
+      if(uncertain){
+        const partnerXs = partnersOf(kp).map(sp=>{ const n = placed.find(pn=>pn.id===sp.id && pn.gen===kpos.gen); return n ? n.x : null; }).filter(v=>v!=null);
+        if(partnerXs.length) childX = [kpos.x, ...partnerXs].reduce((a,b)=>a+b,0)/(partnerXs.length+1);
+      }
+      edges.push({childX, childGen:kpos.gen, parents:parentPts, adjacent, uncertain});
       cx += widths[i];
     });
   }
@@ -774,6 +814,7 @@ function openSheet(mode){
   setGender("");
   $("#delZone").hidden = true; $("#delConfirm").hidden = true; $("#delBtn").hidden = false;
   $("#otherWrap").hidden = true; $("#linkWrap").hidden = true; $("#pickWrap").hidden = true;
+  $("#uncertainWrap").hidden = true;
   $("#coParentWrap").hidden = true; editCoParents = []; editFormalSpouses = [];
   if(mode.edit){
     const p = P(mode.edit);
@@ -790,6 +831,16 @@ function openSheet(mode){
     $("#f-died-y").value=p.died??""; $("#f-died-m").value=p.diedMonth??""; $("#f-died-d").value=p.diedDay??"";
     $("#f-place").value=p.place||""; $("#f-note").value=p.note||"";
     $("#delZone").hidden = false;
+    // Whether these really are p's own parents (vs their partner's) can
+    // come into question after the fact too - not just while adding them -
+    // so the toggle stays editable here as long as a partner with their own
+    // open parent slot still exists to be ambiguous with.
+    const uncertainPartner = (p.parents||[]).length ? partnersOf(p).find(sp=>!sp.placeholder && (sp.parents||[]).length<2) : null;
+    if(uncertainPartner){
+      $("#uncertainWrap").hidden = false;
+      $("#uncertainText").textContent = `Not sure if these are ${displayName(p)||"their"}'s parents or ${displayName(uncertainPartner)||"their partner"}'s`;
+      $("#f-uncertain").checked = !!p.parentsUncertain;
+    }
     // Registered partners (added via +Partner, or "link as partner" when
     // adding a parent) are a couple regardless of any shared child, so
     // divorce applies to them directly - no "assumed by default" toggle,
@@ -838,6 +889,16 @@ function openSheet(mode){
       if(existing && !(existing.spouses||[]).length){
         $("#linkWrap").hidden = false;
         $("#linkText").textContent = `Partner of ${displayName(existing)}`;
+      }
+      // Not every physical record makes it clear which spouse is the blood
+      // child and which married in - offer the "not sure which" option
+      // whenever f has a partner who could equally be the one these belong
+      // to, instead of silently assuming it's f.
+      const uncertainPartner = partnersOf(f).find(sp=>!sp.placeholder && (sp.parents||[]).length<2);
+      if(uncertainPartner){
+        $("#uncertainWrap").hidden = false;
+        $("#uncertainText").textContent = `Not sure if these are ${displayName(f)||"their"}'s parents or ${displayName(uncertainPartner)||"their partner"}'s`;
+        $("#f-uncertain").checked = !!f.parentsUncertain;
       }
     }
   }
@@ -899,7 +960,8 @@ $("#sheetForm").addEventListener("submit", async e => {
       const notPartnerWith = editCoParents.filter(id=>!partnered.has(id));
       const divorcedSet = new Set([...document.querySelectorAll('#coParentList input[data-divorced]:checked')].map(el=>el.dataset.divorced));
       const divorced = uniq([...editCoParents, ...editFormalSpouses]).filter(id=>divorcedSet.has(id));
-      await put({...p, ...fields, notPartnerWith, divorced});
+      const parentsUncertain = $("#uncertainWrap").hidden ? !!p.parentsUncertain : $("#f-uncertain").checked;
+      await put({...p, ...fields, notPartnerWith, divorced, parentsUncertain});
       for(const cpId of editCoParents){
         const cp = P(cpId); if(!cp) continue;
         const cur = new Set(cp.notPartnerWith||[]);
@@ -931,7 +993,8 @@ $("#sheetForm").addEventListener("submit", async e => {
           await put({...other, spouses: uniq([...(other.spouses||[]), person.id])});
           await linkAsPartners(other.id, person.id);
         } else await put(person);
-        await put({...f, parents: uniq([...(f.parents||[]), person.id]).slice(0,2)});
+        const parentsUncertain = $("#uncertainWrap").hidden ? !!f.parentsUncertain : $("#f-uncertain").checked;
+        await put({...f, parents: uniq([...(f.parents||[]), person.id]).slice(0,2), parentsUncertain});
       }
       else if(rel==="partner"){
         person.spouses = uniq([...person.spouses, f.id]);

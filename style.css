@@ -68,8 +68,10 @@ main{max-width:1400px;margin:0 auto;padding:18px var(--gutter-r) calc(48px + env
 #app.panning,#app.panning .pedigree{cursor:grabbing;user-select:none}
 .pedigree .lines{position:absolute;left:0;top:0;pointer-events:none}
 .fam-line{stroke:var(--line);stroke-width:1.5}
+.fam-line.uncertain{stroke-dasharray:5 3;opacity:.75}
 .tie-line{stroke:var(--line);stroke-width:1.5;stroke-dasharray:3 3}
 .divorce-x{stroke:var(--danger);stroke-width:2.5;stroke-linecap:round}
+.uncertain-q{fill:var(--muted);font-size:12px;font-weight:700;font-family:var(--body)}
 
 .node{position:absolute;transform:translate(-50%,-50%);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;width:108px;padding:9px 8px;border-radius:14px;background:var(--card);border:1.5px solid var(--line);text-align:center}
 .node:hover{border-color:var(--accent);z-index:2}
@@ -136,6 +138,7 @@ main{max-width:1400px;margin:0 auto;padding:18px var(--gutter-r) calc(48px + env
 .dockInfo .maiden{font-family:var(--body);margin-top:2px}
 .anchorBadge{font-size:.82em}
 .divorcedBadge{font-size:.78em;color:var(--danger);font-weight:700}
+.uncertainBadge{font-size:.78em;color:var(--muted);font-weight:700}
 .anchorHint{margin-top:2px}
 .copyrow{display:flex;gap:8px}
 .copyrow input{flex:1;min-width:0}

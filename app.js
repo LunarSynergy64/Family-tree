@@ -103,9 +103,12 @@ let showMiddleNames = keyGet("ft-showmiddle")==="1";
 let zoom = Math.min(1.5, Math.max(0.25, Number(keyGet("ft-zoom")) || 1));
 function applyZoom(){ document.documentElement.style.setProperty("--zoom", zoom); }
 applyZoom();
-$("#zoomIn").addEventListener("click", () => { zoom = Math.min(1.5, +(zoom+0.15).toFixed(2)); applyZoom(); keySet("ft-zoom", zoom); });
-$("#zoomOut").addEventListener("click", () => { zoom = Math.max(0.25, +(zoom-0.15).toFixed(2)); applyZoom(); keySet("ft-zoom", zoom); });
-$("#zoomReset").addEventListener("click", () => { zoom = 1; applyZoom(); keySet("ft-zoom", zoom); });
+// Zoom now also decides how much auto-collapses (see autoCollapseDepth),
+// not just the visual scale - so every change has to re-run the layout,
+// not just restyle it.
+$("#zoomIn").addEventListener("click", () => { zoom = Math.min(1.5, +(zoom+0.15).toFixed(2)); applyZoom(); keySet("ft-zoom", zoom); render(); });
+$("#zoomOut").addEventListener("click", () => { zoom = Math.max(0.25, +(zoom-0.15).toFixed(2)); applyZoom(); keySet("ft-zoom", zoom); render(); });
+$("#zoomReset").addEventListener("click", () => { zoom = 1; applyZoom(); keySet("ft-zoom", zoom); render(); });
 
 function showHome(){
   if(unsub){ unsub(); unsub = null; }
@@ -358,27 +361,45 @@ const SLOT_W = 124, ROW_H = 148;
    other side becomes a tap-to-explore dead end, exactly like a spouse -
    tapping it switches the active anchor to their own side instead. */
 const isAnchor = p => !!p && (p.anchor===true || (tree && tree.defaultFocus===p.id));
-// A branch marked "collapsed" (see openPersonOptions) renders as one named
-// box standing in for that person AND their whole recursive ancestor fan -
-// independent of anchor status, and undone (for this session) by tapping
-// the box, same spirit as an anchor's one-generation-at-a-time reveal but
-// a full open/close toggle for the one person rather than a climb.
-const isCollapsedHidden = p => !!(p && p.collapsed && !expandedBranches.has(p.id));
+// How many generations above the CURRENT root stay fully shown before
+// auto-collapsing kicks in, purely from the current zoom level - on top
+// of (never instead of) anyone explicitly marked collapsed. Never
+// persisted: zooming back in always un-collapses it for free, same as
+// zooming out always re-collapses it, independent of anything tapped
+// open in the meantime.
+function autoCollapseDepth(){
+  if(zoom>=0.65) return Infinity;
+  if(zoom>=0.5) return 4;
+  if(zoom>=0.4) return 3;
+  if(zoom>=0.32) return 2;
+  return 1;
+}
+// Whether p renders as a collapsed box at generation `gen` (negative
+// above the root, 0 at it) - either because it's explicitly marked
+// collapsed (see openPersonOptions), or because zooming out has pushed
+// this generation past the auto-collapse depth above. Tapping a box
+// (see the click handler's [data-peek]) adds it to expandedBranches,
+// overriding either reason for this viewing session.
+function isHiddenAt(p, gen){
+  if(!p || expandedBranches.has(p.id)) return false;
+  if(p.collapsed) return true;
+  return (-gen) >= autoCollapseDepth();
+}
 // Collapsing is about decluttering, not just stopping - a generation
 // between here and the collapsed ancestor still needs showing (it's the
 // actual bloodline back to whoever you're looking at), but ITS siblings
 // and in-laws are exactly the kind of side-branch the whole feature exists
 // to hide, so every level on the way up to a collapsed ancestor (inclusive)
 // also drops its own sibling row, continuing as a single-file chain.
-function leadsToCollapse(id, visited){
+function leadsToCollapse(id, gen, visited){
   visited = visited || new Set();
   if(!id || visited.has(id)) return false;
   visited.add(id);
   const p = P(id); if(!p) return false;
-  if(isCollapsedHidden(p)) return true;
+  if(isHiddenAt(p, gen)) return true;
   if(isBlocked(p)) return false;
   const {expand} = splitParents(parentsOf(p));
-  return expand.some(par=>leadsToCollapse(par.id, visited));
+  return expand.some(par=>leadsToCollapse(par.id, gen-1, visited));
 }
 const isDivorced = (a, b) => !!(a && b && ((a.divorced||[]).includes(b.id) || (b.divorced||[]).includes(a.id)));
 // A divorced couple sitting right next to each other reads fine with the
@@ -436,10 +457,10 @@ function splitParents(parents){
   return {expand: parents.length===2 ? sortCoupleByGender(parents) : parents, suppressed:null};
 }
 
-function ancWidth(id, excludeSpouseId, extraPartnerId){
+function ancWidth(id, excludeSpouseId, extraPartnerId, gen){
   const p = P(id);
-  const collapsedHidden = isCollapsedHidden(p);
-  const sibs = leadsToCollapse(id) ? [] : siblingsOf(p).map(s=>s.p);
+  const collapsedHidden = isHiddenAt(p, gen);
+  const sibs = leadsToCollapse(id, gen) ? [] : siblingsOf(p).map(s=>s.p);
   const folks = [p, ...sibs];
   // a collapsed-and-unopened pivot takes exactly one slot - their partner(s)
   // are folded into that same box rather than drawn alongside it.
@@ -460,7 +481,7 @@ function ancWidth(id, excludeSpouseId, extraPartnerId){
     ? expand.reduce((sum,par,i)=>{
         const exclude = expand.length>1 ? expand[1-i].id : null;
         const extra = (expand.length===1 && suppressed && !(par.spouses||[]).includes(suppressed.id)) ? suppressed.id : null;
-        return sum + ancWidth(par.id, exclude, extra);
+        return sum + ancWidth(par.id, exclude, extra, gen-1);
       }, 0)
     : 0;
   return Math.max(rowWidth, upWidth, 1);
@@ -475,7 +496,7 @@ function descWidth(id){
 
 function placeAncestor(placed, edges, id, excludeSpouseId, xLeft, width, gen, extraPartnerId, pinSide){
   const p = P(id);
-  const collapsedHidden = isCollapsedHidden(p);
+  const collapsedHidden = isHiddenAt(p, gen);
   const parents = parentsOf(p);
   const {expand, suppressed} = (isBlocked(p) || collapsedHidden) ? {expand:[], suppressed:null} : splitParents(parents);
   const parentPos = [];
@@ -486,7 +507,7 @@ function placeAncestor(placed, edges, id, excludeSpouseId, xLeft, width, gen, ex
     // already recorded as a spouse gets placed by that row normally.
     const excludeFor = i => expand.length>1 ? expand[1-i].id : null;
     const extraFor = i => (expand.length===1 && suppressed && !(expand[i].spouses||[]).includes(suppressed.id)) ? suppressed.id : null;
-    const widths = expand.map((par,i)=>ancWidth(par.id, excludeFor(i), extraFor(i)));
+    const widths = expand.map((par,i)=>ancWidth(par.id, excludeFor(i), extraFor(i), gen-1));
     const totalW = widths.reduce((a,b)=>a+b,0);
     // When THIS row is itself pinned to an edge (to stay adjacent to its
     // own co-parent - see below), center these grandparents in the full
@@ -532,7 +553,7 @@ function placeAncestor(placed, edges, id, excludeSpouseId, xLeft, width, gen, ex
     // own row below (either normally, as a registered spouse, or via
     // extraPartnerId right above) - nothing left to do here.
   }
-  const sibs = leadsToCollapse(id) ? [] : siblingsOf(p);
+  const sibs = leadsToCollapse(id, gen) ? [] : siblingsOf(p);
   let folks = [{person:p, half:false, isPivot:true}, ...sibs.map(s=>({person:s.p, half:s.half, isPivot:false}))]
     .sort((a,b)=>byBorn(a.person,b.person));
   if(pinSide){
@@ -746,11 +767,17 @@ function renderEdges(edges, px, py){
 function bubbleHtml(n, x, y){
   const p = P(n.id); if(!p) return "";
   if(p.placeholder) return `<button class="node ph" style="left:${x}px;top:${y}px" data-go="${esc(n.id)}">Unknown</button>`;
-  if(n.collapsedBox) return `<button class="node collapsedNode" style="left:${x}px;top:${y}px" data-go="${esc(n.id)}">
-    <span class="collapseIcon" data-collapse="${esc(n.id)}" title="Expand this branch for good">⊞</span>
-    <span class="nm">${esc(p.branchName || "Family branch")}</span>
-    <span class="yrs">Tap to peek</span>
-  </button>`;
+  if(n.collapsedBox){
+    // An auto-collapsed-by-zoom box (nobody tapped "Collapse this branch"
+    // here, just zoomed out far enough) has no branchName to fall back
+    // on - borrow the same auto-name the quick collapse icon would use.
+    const branchLabel = p.branchName || `The ${surname(p)} Family`;
+    return `<button class="node collapsedNode" style="left:${x}px;top:${y}px" data-peek="${esc(n.id)}">
+      <span class="collapseIcon" data-collapse="${esc(n.id)}" title="Expand this branch for good">⊞</span>
+      <span class="nm">${esc(branchLabel)}</span>
+      <span class="yrs">Tap to peek</span>
+    </button>`;
+  }
   const more = (n.deadEnd && (parentsOf(p).length || childrenOf(p.id).length)) || (isBlocked(p) && parentsOf(p).length>0);
   const genderCls = p.gender==="m" ? " g-m" : p.gender==="f" ? " g-f" : "";
   // Only a true ancestor-chain pivot (never a dim attached spouse or a
@@ -807,7 +834,7 @@ function renderPedigree(){
   currentAnchor = activeAnchor;
 
   const placed = [], edges = [];
-  const focalPos = placeAncestor(placed, edges, root.id, null, 0, ancWidth(root.id, null), 0);
+  const focalPos = placeAncestor(placed, edges, root.id, null, 0, ancWidth(root.id, null, null, 0), 0);
   const focalSpouseX = new Map();
   partnersOf(root).forEach(sp=>{ const n = placed.find(x=>x.id===sp.id); if(n) focalSpouseX.set(sp.id, n.x); });
 
@@ -1273,17 +1300,18 @@ document.addEventListener("click", e => {
     }
     return;
   }
+  // A collapsed box (manual or auto-by-zoom) stands in for that whole
+  // person - tapping it just opens it back up for this session, same as
+  // the anchor reveal below, rather than navigating focus onto them.
+  const pk = e.target.closest("[data-peek]");
+  if(pk){
+    expandedBranches.add(pk.dataset.peek);
+    return render();
+  }
   const g = e.target.closest("[data-go]");
   if(g){
     const id = g.dataset.go, p = P(id);
     if(p && p.placeholder) return openSheet({edit:id});
-    // A collapsed branch's box stands in for that whole person - tapping it
-    // just opens it back up for this session, same as the anchor reveal
-    // below, rather than navigating focus onto them.
-    if(p && isCollapsedHidden(p)){
-      expandedBranches.add(id);
-      return render();
-    }
     // an anchor (or someone just revealed as one's parent) with its own
     // parents on record isn't a dead end - tapping it reveals them, one
     // generation at a time, instead of collapsing the view onto them.

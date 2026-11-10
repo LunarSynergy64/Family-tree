@@ -547,9 +547,14 @@ function placeDescendant(placed, edges, id, xLeft, width, gen){
       const kp = P(k.id);
       const parentPts = [{x, gen}];
       (kp.parents||[]).forEach(pid=>{ if(spouseX.has(pid)) parentPts.push({x:spouseX.get(pid), gen}); });
-      // the pivot's own attached spouse always sits right next to them, so
-      // a single trunk from their shared midpoint always looks right here.
-      edges.push({childX:kpos.x, childGen:kpos.gen, parents:parentPts, adjacent:true});
+      // a single midpoint trunk only looks right when the two parents are
+      // actually sitting next to each other - with more than one partner
+      // in the row, the matched one might be further off, and averaging
+      // the two positions can land the trunk on whoever happens to sit
+      // between them (looking like a third parent), so fall back to a
+      // stub per parent in that case, same as independently-forked ones.
+      const adjacent = parentPts.length<2 || adjacentX(parentPts[0].x, parentPts[1].x);
+      edges.push({childX:kpos.x, childGen:kpos.gen, parents:parentPts, adjacent});
       cx += widths[i];
     });
   }
@@ -666,7 +671,10 @@ function renderPedigree(){
       const kp = P(k.id);
       const parentPts = [{x:focalPos.x, gen:0}];
       (kp.parents||[]).forEach(pid=>{ if(focalSpouseX.has(pid)) parentPts.push({x:focalSpouseX.get(pid), gen:0}); });
-      edges.push({childX:kpos.x, childGen:kpos.gen, parents:parentPts, adjacent:true});
+      // same reasoning as the matching spot in placeDescendant - only
+      // trunk the two parents together when they're actually adjacent.
+      const adjacent = parentPts.length<2 || adjacentX(parentPts[0].x, parentPts[1].x);
+      edges.push({childX:kpos.x, childGen:kpos.gen, parents:parentPts, adjacent});
       cx += widths[i];
     });
   }

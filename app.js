@@ -246,6 +246,23 @@ async function ensureParentPlaceholder(id){
   await put({...p, parents:[ph.id]});
   return ph.id;
 }
+/* Two people becoming partners should run both ways, same as the existing
+   "sharing a child assumes a couple" default: once they're linked, any
+   existing child of either one with an open parent slot (fewer than 2
+   recorded) is assumed to be theirs together too - otherwise a parent added
+   via +Partner (rather than +Parent) only shows up sideways as a spouse,
+   never upwards as that child's other parent. Never touches a slot that's
+   already filled, so an unrelated half-sibling's real other parent is safe. */
+async function linkAsPartners(aId, bId){
+  for(const kid of childrenOf(aId)){
+    if((kid.parents||[]).length<2 && !(kid.parents||[]).includes(bId))
+      await put({...kid, parents: uniq([...(kid.parents||[]), bId]).slice(0,2)});
+  }
+  for(const kid of childrenOf(bId)){
+    if((kid.parents||[]).length<2 && !(kid.parents||[]).includes(aId))
+      await put({...kid, parents: uniq([...(kid.parents||[]), aId]).slice(0,2)});
+  }
+}
 async function setDefaultFocus(id){
   try {
     await setDoc(doc(fs, "trees", tree.key), {defaultFocus: id}, {merge:true});
@@ -912,6 +929,7 @@ $("#sheetForm").addEventListener("submit", async e => {
           person.spouses = uniq([...person.spouses, other.id]);
           await put(person);
           await put({...other, spouses: uniq([...(other.spouses||[]), person.id])});
+          await linkAsPartners(other.id, person.id);
         } else await put(person);
         await put({...f, parents: uniq([...(f.parents||[]), person.id]).slice(0,2)});
       }
@@ -919,6 +937,7 @@ $("#sheetForm").addEventListener("submit", async e => {
         person.spouses = uniq([...person.spouses, f.id]);
         await put(person);
         await put({...f, spouses: uniq([...(f.spouses||[]), person.id])});
+        await linkAsPartners(f.id, person.id);
       }
       else if(rel==="child"){
         const other = $("#f-other").value;

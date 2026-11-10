@@ -364,6 +364,22 @@ const isAnchor = p => !!p && (p.anchor===true || (tree && tree.defaultFocus===p.
 // the box, same spirit as an anchor's one-generation-at-a-time reveal but
 // a full open/close toggle for the one person rather than a climb.
 const isCollapsedHidden = p => !!(p && p.collapsed && !expandedBranches.has(p.id));
+// Collapsing is about decluttering, not just stopping - a generation
+// between here and the collapsed ancestor still needs showing (it's the
+// actual bloodline back to whoever you're looking at), but ITS siblings
+// and in-laws are exactly the kind of side-branch the whole feature exists
+// to hide, so every level on the way up to a collapsed ancestor (inclusive)
+// also drops its own sibling row, continuing as a single-file chain.
+function leadsToCollapse(id, visited){
+  visited = visited || new Set();
+  if(!id || visited.has(id)) return false;
+  visited.add(id);
+  const p = P(id); if(!p) return false;
+  if(isCollapsedHidden(p)) return true;
+  if(isBlocked(p)) return false;
+  const {expand} = splitParents(parentsOf(p));
+  return expand.some(par=>leadsToCollapse(par.id, visited));
+}
 const isDivorced = (a, b) => !!(a && b && ((a.divorced||[]).includes(b.id) || (b.divorced||[]).includes(a.id)));
 // A divorced couple sitting right next to each other reads fine with the
 // X drawn over their connecting line - that's only confusing when another
@@ -423,7 +439,7 @@ function splitParents(parents){
 function ancWidth(id, excludeSpouseId, extraPartnerId){
   const p = P(id);
   const collapsedHidden = isCollapsedHidden(p);
-  const sibs = siblingsOf(p).map(s=>s.p);
+  const sibs = leadsToCollapse(id) ? [] : siblingsOf(p).map(s=>s.p);
   const folks = [p, ...sibs];
   // a collapsed-and-unopened pivot takes exactly one slot - their partner(s)
   // are folded into that same box rather than drawn alongside it.
@@ -509,7 +525,7 @@ function placeAncestor(placed, edges, id, excludeSpouseId, xLeft, width, gen, ex
     // own row below (either normally, as a registered spouse, or via
     // extraPartnerId right above) - nothing left to do here.
   }
-  const sibs = siblingsOf(p);
+  const sibs = leadsToCollapse(id) ? [] : siblingsOf(p);
   let folks = [{person:p, half:false, isPivot:true}, ...sibs.map(s=>({person:s.p, half:s.half, isPivot:false}))]
     .sort((a,b)=>byBorn(a.person,b.person));
   if(pinSide){
@@ -706,12 +722,29 @@ function bubbleHtml(n, x, y){
   const p = P(n.id); if(!p) return "";
   if(p.placeholder) return `<button class="node ph" style="left:${x}px;top:${y}px" data-go="${esc(n.id)}">Unknown</button>`;
   if(n.collapsedBox) return `<button class="node collapsedNode" style="left:${x}px;top:${y}px" data-go="${esc(n.id)}">
+    <span class="collapseIcon" data-collapse="${esc(n.id)}" title="Expand this branch for good">⊞</span>
     <span class="nm">${esc(p.branchName || "Family branch")}</span>
-    <span class="yrs">Tap to expand</span>
+    <span class="yrs">Tap to peek</span>
   </button>`;
   const more = (n.deadEnd && (parentsOf(p).length || childrenOf(p.id).length)) || (isBlocked(p) && parentsOf(p).length>0);
   const genderCls = p.gender==="m" ? " g-m" : p.gender==="f" ? " g-f" : "";
+  // Only a true ancestor-chain pivot (never a dim attached spouse or a
+  // sibling dead end, neither of which ever expand upward anyway) can
+  // meaningfully collapse - and only in the ancestor direction (gen<=0),
+  // since collapsing a descendant-side node wouldn't affect anything there.
+  const canCollapse = !n.dim && !n.deadEnd && n.gen<=0 && parentsOf(p).length>0;
+  // Peeking into a collapsed branch (see click handler) shows it as a
+  // normal node again, but p.collapsed itself is still true underneath -
+  // the icon has to reflect THAT, not the temporary peek, or tapping it
+  // while peeking would look like "collapse again" but actually clear the
+  // collapsed flag for good.
+  const collapseIcon = canCollapse
+    ? (p.collapsed
+      ? `<span class="collapseIcon" data-collapse="${esc(n.id)}" title="Peeking - tap to turn off collapsing for good">⊞</span>`
+      : `<span class="collapseIcon" data-collapse="${esc(n.id)}" title="Collapse this branch">⊟</span>`)
+    : "";
   return `<button class="node${n.dim?" dim":""}${n.id===focusId?" me":""}${more?" more":""}${genderCls}" style="left:${x}px;top:${y}px" data-go="${esc(n.id)}">
+    ${collapseIcon}
     <span class="nm">${esc(displayName(p)||"Unnamed")}${isAnchor(p)?` <span class="anchorBadge" title="Anchor point">⚓</span>`:""}${n.divorced?` <span class="divorcedBadge" title="Divorced">✕</span>`:""}${p.parentsUncertain?` <span class="uncertainBadge" title="Might be their partner's parents instead - unclear which of them is the blood child">?</span>`:""}</span>
     ${p.maidenName?`<span class="maiden">(${esc(p.maidenName)})</span>`:""}
     <span class="yrs${birthKnown(p)?"":" unk"}">${esc(birthLabel(p))}</span>
@@ -1195,6 +1228,22 @@ app.addEventListener("mousedown", e => {
 /* ================= events ================= */
 document.addEventListener("click", e => {
   if(dragged){ dragged = false; e.stopPropagation(); e.preventDefault(); return; }
+  // The quick collapse icon sits inside a [data-go] node button, so it has
+  // to be checked first - otherwise tapping it would also fire the node's
+  // own navigate/reveal/peek behavior underneath it.
+  const cb = e.target.closest("[data-collapse]");
+  if(cb){
+    const id = cb.dataset.collapse, p = P(id); if(!p) return;
+    if(p.collapsed){
+      put({...p, collapsed:false}).then(ok=>{ if(ok){ expandedBranches.delete(id); setFocus(focusId); render(); } });
+    } else {
+      const name = p.branchName || `The ${surname(p)} Family`;
+      put({...p, collapsed:true, branchName:name}).then(ok=>{
+        if(ok){ setFocus(focusId); render(); toast(`Collapsed as "${name}" - rename it anytime from ⋯ Options.`); }
+      });
+    }
+    return;
+  }
   const g = e.target.closest("[data-go]");
   if(g){
     const id = g.dataset.go, p = P(id);

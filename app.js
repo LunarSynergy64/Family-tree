@@ -837,9 +837,11 @@ function bubbleHtml(n, x, y){
   const genderCls = p.gender==="m" ? " g-m" : p.gender==="f" ? " g-f" : "";
   // Only a true chain pivot (never a dim attached spouse or a sibling dead
   // end, neither of which ever expand further themselves) can meaningfully
-  // collapse - and only if there's actually a branch on them to fold away,
-  // ancestors above or descendants below.
-  const canCollapse = !n.dim && !n.deadEnd && (parentsOf(p).length>0 || childrenOf(p.id).length>0);
+  // collapse - and only an anchor point, the designated places to fold a
+  // branch away, with a branch on them to actually fold (ancestors above
+  // or descendants below). Already-collapsed still counts even if its
+  // anchor status changed since, so the toggle to undo it is never stranded.
+  const canCollapse = !n.dim && !n.deadEnd && (isAnchor(p) || p.collapsed) && (parentsOf(p).length>0 || childrenOf(p.id).length>0);
   // Peeking into a collapsed branch (see click handler) shows it as a
   // normal node again, but p.collapsed itself is still true underneath -
   // the icon has to reflect THAT, not the temporary peek, or tapping it
@@ -1119,9 +1121,11 @@ function openPersonOptions(id){
   $("#optAnchorHint").textContent = isDefault
     ? "This is the tree's starting point, so it's always an anchor."
     : "Ancestors stop expanding automatically once they reach an anchor — tap it to explore further back instead.";
-  // Collapsing only makes sense once there's actually a branch to hide -
-  // ancestors above or descendants below.
-  const canCollapse = parentsOf(p).length>0 || childrenOf(p.id).length>0;
+  // Collapsing is only for anchor points - the designated places to fold a
+  // branch away - and only once there's actually a branch to hide: ancestors
+  // above or descendants below. Already-collapsed still counts even if its
+  // anchor status changed since, so the toggle to undo it is never stranded.
+  const canCollapse = (isDefault || !!p.anchor || p.collapsed) && (parentsOf(p).length>0 || childrenOf(p.id).length>0);
   $("#optCollapseWrap").hidden = !canCollapse;
   $("#optCollapseHint").hidden = !canCollapse;
   $("#optCollapse").checked = !!p.collapsed;

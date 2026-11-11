@@ -692,6 +692,10 @@ function placeDescendant(placed, edges, id, xLeft, width, gen){
     placed.push({id:sp.id, x:sx, gen, dim:true, placeholder:!!sp.placeholder, deadEnd:true, divorced: divorced && !adj});
     edges.push({tie:true, a:{x, gen}, b:{x:sx, gen}, divorced: divorced && adj});
     spouseX.set(sp.id, sx);
+    // A spouse married in on the way down never gets their own ancestry
+    // expanded (same as the ancestor-direction dim attachment) - without
+    // this, their recorded parents just silently vanish with no trace.
+    if(!sp.placeholder && (sp.parents||[]).length) edges.push({stub:true, x:sx, gen});
   });
 
   const kids = childrenOf(id).sort(byBorn);

@@ -557,15 +557,27 @@ function natDescWidth(id){
 // once that gets absurd.
 const BRANCH_BUDGET = 4;
 const MIN_BRANCH_RATIO = 0.15;
+// The scale kidId's OWN children should use, judged purely on kidId's own
+// subtree (never pooled with kidId's siblings - that's what let one
+// crowded sibling drag every other sibling's kids down with it).
+function kidGrandkidScale(nextScale, kidId){
+  const nat = natDescWidth(kidId);
+  const ratio = nat>BRANCH_BUDGET ? Math.max(BRANCH_BUDGET/nat, MIN_BRANCH_RATIO) : 1;
+  return nextScale*ratio;
+}
 // ownScale: the size id itself (and its own siblings) render at - never
 // reduced by id's own crowding. nextScale: the size id's OWN kids render
 // at, inherited from whoever decided ownScale (defaults to the same,
 // i.e. unreduced, until someone's own crowding first calls for less).
+// Unlike ancestors, descendants never shrink just for being many
+// generations down (see genScale) - an isolated branch with nothing
+// crowding it stays full size no matter how deep it goes, since there's
+// nothing here that actually needs the room back.
 function descWidth(id, gen, ownScale, nextScale){
   ownScale = ownScale==null ? 1 : ownScale;
   nextScale = nextScale==null ? ownScale : nextScale;
   const p = P(id);
-  const step = ownScale*genScale(gen);
+  const step = ownScale;
   // Collapsing isn't just an ancestor-side thing - folding someone's own
   // descendants into one box needs exactly the same one-slot treatment
   // here, or their whole subtree would still reserve room as if nothing
@@ -574,10 +586,10 @@ function descWidth(id, gen, ownScale, nextScale){
   const rowWidth = step*(1 + partnersOf(p).length);
   const kids = childrenOf(id);
   if(!kids.length) return Math.max(rowWidth, step);
-  const nat = natDescWidth(id);
-  const ratio = nat>BRANCH_BUDGET ? Math.max(BRANCH_BUDGET/nat, MIN_BRANCH_RATIO) : 1;
-  const grandkidScale = nextScale*ratio;
-  const downWidth = kids.reduce((sum,k)=>sum+descWidth(k.id, gen+1, nextScale, grandkidScale),0);
+  // Each kid's own crowding (never pooled with its siblings) decides how
+  // much THAT kid's own children compress - a kid with nothing crowding
+  // it stays full size regardless of what its siblings are dealing with.
+  const downWidth = kids.reduce((sum,k)=>sum+descWidth(k.id, gen+1, nextScale, kidGrandkidScale(nextScale, k.id)),0);
   return Math.max(rowWidth, downWidth, step);
 }
 
@@ -731,7 +743,7 @@ function placeDescendant(placed, edges, id, xLeft, width, gen, ownScale, nextSca
   ownScale = ownScale==null ? 1 : ownScale;
   nextScale = nextScale==null ? ownScale : nextScale;
   const p = P(id);
-  const step = ownScale*genScale(gen);
+  const step = ownScale;
   if(isHiddenAt(p, gen)){
     // Collapsing someone folds their own descendants away too, not just
     // their ancestry - one box standing in for them and everyone below,
@@ -769,13 +781,12 @@ function placeDescendant(placed, edges, id, xLeft, width, gen, ownScale, nextSca
 
   const kids = childrenOf(id).sort(byBorn);
   if(kids.length){
-    // p's own crowding (never pooled with p's siblings) decides how much
-    // p's GRANDKIDS compress - p's own kids still render at nextScale,
-    // the same size any childless sibling's kids would.
-    const nat = natDescWidth(id);
-    const ratio = nat>BRANCH_BUDGET ? Math.max(BRANCH_BUDGET/nat, MIN_BRANCH_RATIO) : 1;
-    const grandkidScale = nextScale*ratio;
-    const widths = kids.map(k=>descWidth(k.id, gen+1, nextScale, grandkidScale));
+    // Each kid's own crowding (never pooled with its siblings) decides
+    // how much THAT kid's own children compress - p's own kids all still
+    // render at nextScale, the same size any childless sibling's kids
+    // would, regardless of which of them this is about.
+    const kidScales = kids.map(k=>kidGrandkidScale(nextScale, k.id));
+    const widths = kids.map((k,i)=>descWidth(k.id, gen+1, nextScale, kidScales[i]));
     const totalW = widths.reduce((a,b)=>a+b,0);
     // center the children block on the full allocated width, not on the
     // pivot's own position - when the pivot has a spouse, their own x sits
@@ -783,7 +794,7 @@ function placeDescendant(placed, edges, id, xLeft, width, gen, ownScale, nextSca
     // grandchildren left too, overlapping whatever's allocated next door.
     let cx = (xLeft + width/2) - totalW/2;
     kids.forEach((k,i)=>{
-      const kpos = placeDescendant(placed, edges, k.id, cx, widths[i], gen+1, nextScale, grandkidScale);
+      const kpos = placeDescendant(placed, edges, k.id, cx, widths[i], gen+1, nextScale, kidScales[i]);
       const kp = P(k.id);
       const parentPts = [{x, gen}];
       (kp.parents||[]).forEach(pid=>{ if(spouseX.has(pid)) parentPts.push({x:spouseX.get(pid), gen}); });

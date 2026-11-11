@@ -545,11 +545,17 @@ function natDescWidth(id){
 // GRANDKIDS down - judged purely on that sibling's own subtree, never
 // pooled with their siblings, so an uncrowded sibling is never punished
 // for a crowded one, and the compression only starts two generations
-// below wherever it was decided, not at the kids themselves. A floor
+// below wherever it was decided, not at the kids themselves. A typical
+// family easily has a few kids who each have a couple of kids of their
+// own - BRANCH_BUDGET is how much natural width that's allowed to take
+// before anything shrinks at all, so an ordinary-sized family is never
+// touched; only a branch that genuinely dwarfs that starts compressing,
+// and even then only down past the budget, not all the way to 1. A floor
 // keeps any single generation from vanishing to nothing in one jump -
 // deep, wide branches still shrink further through repeated cascading,
 // same as before, with the collapse feature as the real escape valve
 // once that gets absurd.
+const BRANCH_BUDGET = 4;
 const MIN_BRANCH_RATIO = 0.15;
 // ownScale: the size id itself (and its own siblings) render at - never
 // reduced by id's own crowding. nextScale: the size id's OWN kids render
@@ -569,7 +575,7 @@ function descWidth(id, gen, ownScale, nextScale){
   const kids = childrenOf(id);
   if(!kids.length) return Math.max(rowWidth, step);
   const nat = natDescWidth(id);
-  const ratio = nat>1 ? Math.max(1/nat, MIN_BRANCH_RATIO) : 1;
+  const ratio = nat>BRANCH_BUDGET ? Math.max(BRANCH_BUDGET/nat, MIN_BRANCH_RATIO) : 1;
   const grandkidScale = nextScale*ratio;
   const downWidth = kids.reduce((sum,k)=>sum+descWidth(k.id, gen+1, nextScale, grandkidScale),0);
   return Math.max(rowWidth, downWidth, step);
@@ -767,7 +773,7 @@ function placeDescendant(placed, edges, id, xLeft, width, gen, ownScale, nextSca
     // p's GRANDKIDS compress - p's own kids still render at nextScale,
     // the same size any childless sibling's kids would.
     const nat = natDescWidth(id);
-    const ratio = nat>1 ? Math.max(1/nat, MIN_BRANCH_RATIO) : 1;
+    const ratio = nat>BRANCH_BUDGET ? Math.max(BRANCH_BUDGET/nat, MIN_BRANCH_RATIO) : 1;
     const grandkidScale = nextScale*ratio;
     const widths = kids.map(k=>descWidth(k.id, gen+1, nextScale, grandkidScale));
     const totalW = widths.reduce((a,b)=>a+b,0);
@@ -975,13 +981,11 @@ function renderPedigree(){
   // return closes for a collapsed pivot anywhere else in the tree.
   const kids = isHiddenAt(root, 0) ? [] : childrenOf(root.id).sort(byBorn);
   if(kids.length){
-    // Root's own crowding (if any) decides how much root's GRANDKIDS
-    // compress - root's own kids all render full size, same as every
-    // sibling row below (see descWidth).
-    const rootNat = natDescWidth(root.id);
-    const rootRatio = rootNat>1 ? Math.max(1/rootNat, MIN_BRANCH_RATIO) : 1;
-    const grandkidScale = rootRatio;
-    const widths = kids.map(k=>descWidth(k.id, 1, 1, grandkidScale));
+    // Root's own kids all render full size, and each of THEM independently
+    // judges their own crowding for their own grandkids (see descWidth) -
+    // root itself has no siblings of its own to pool with, so it hands
+    // down an unreduced scale rather than deciding anything on their behalf.
+    const widths = kids.map(k=>descWidth(k.id, 1, 1, 1));
     const totalW = widths.reduce((a,b)=>a+b,0);
     // center on the root+spouse couple's own midpoint, same as inside
     // placeDescendant, so a spouse doesn't pull the whole fan off-center.
@@ -989,7 +993,7 @@ function renderPedigree(){
     const coupleCenter = spouseXs.length ? [focalPos.x, ...spouseXs].reduce((a,b)=>a+b,0)/(spouseXs.length+1) : focalPos.x;
     let cx = coupleCenter - totalW/2;
     kids.forEach((k,i)=>{
-      const kpos = placeDescendant(placed, edges, k.id, cx, widths[i], 1, 1, grandkidScale);
+      const kpos = placeDescendant(placed, edges, k.id, cx, widths[i], 1, 1, 1);
       const kp = P(k.id);
       const parentPts = [{x:focalPos.x, gen:0}];
       (kp.parents||[]).forEach(pid=>{ if(focalSpouseX.has(pid)) parentPts.push({x:focalSpouseX.get(pid), gen:0}); });

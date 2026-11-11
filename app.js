@@ -1410,7 +1410,15 @@ document.addEventListener("click", e => {
     } else {
       const name = p.branchName || `The ${surname(p)} Family`;
       put({...p, collapsed:true, branchName:name}).then(ok=>{
-        if(ok){ setFocus(focusId); render(); toast(`Collapsed as "${name}" - rename it anytime from ⋯ Options.`); }
+        if(ok){
+          // Whoever's looking at themselves never collapses behind their
+          // own box (see isHiddenAt) - collapsing the very person you're
+          // focused on would otherwise look like it did nothing at all, so
+          // hop up to their parent instead, where the fold is actually
+          // visible. Nowhere to hop to (no recorded parent) just stays put.
+          const parent = id===focusId ? parentsOf(p)[0] : null;
+          setFocus(parent ? parent.id : focusId);
+          render(); toast(`Collapsed as "${name}" - rename it anytime from ⋯ Options.`); }
       });
     }
     return;

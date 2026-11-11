@@ -405,9 +405,12 @@ function autoCollapseDepth(){
 // (see the click handler's [data-peek]) adds it to expandedBranches,
 // overriding either reason for this viewing session.
 function isHiddenAt(p, gen){
-  if(!p || expandedBranches.has(p.id)) return false;
+  // Whoever you're actually looking at never disappears behind their own
+  // box, collapsed or not - same exception as their size always staying
+  // full (see bubbleHtml).
+  if(!p || expandedBranches.has(p.id) || p.id===focusId) return false;
   if(p.collapsed) return true;
-  return (-gen) >= autoCollapseDepth();
+  return gen>=0 ? false : (-gen) >= autoCollapseDepth();
 }
 // Collapsing is about decluttering, not just stopping - a generation
 // between here and the collapsed ancestor still needs showing (it's the
@@ -516,6 +519,11 @@ function ancWidth(id, excludeSpouseId, extraPartnerId, gen){
 function descWidth(id, gen){
   const p = P(id);
   const step = genScale(gen);
+  // Collapsing isn't just an ancestor-side thing - folding someone's own
+  // descendants into one box needs exactly the same one-slot treatment
+  // here, or their whole subtree would still reserve room as if nothing
+  // were hidden.
+  if(isHiddenAt(p, gen)) return step;
   const rowWidth = step*(1 + partnersOf(p).length);
   const kids = childrenOf(id);
   const downWidth = kids.length ? kids.reduce((sum,k)=>sum+descWidth(k.id, gen+1),0) : 0;
@@ -671,6 +679,14 @@ function placeAncestor(placed, edges, id, excludeSpouseId, xLeft, width, gen, ex
 function placeDescendant(placed, edges, id, xLeft, width, gen){
   const p = P(id);
   const step = genScale(gen);
+  if(isHiddenAt(p, gen)){
+    // Collapsing someone folds their own descendants away too, not just
+    // their ancestry - one box standing in for them and everyone below,
+    // same as the ancestor-direction version folds their partner in.
+    const x = xLeft + width/2;
+    placed.push({id:p.id, x, gen, collapsedBox:true});
+    return {x, gen};
+  }
   const partners = partnersOf(p);
   // The pivot + their spouse(s) only need (1 + partners.length) slots, but
   // `width` can be wider than that to make room for grandchildren below -
@@ -819,11 +835,11 @@ function bubbleHtml(n, x, y){
   }
   const more = (n.deadEnd && (parentsOf(p).length || childrenOf(p.id).length)) || (isBlocked(p) && parentsOf(p).length>0);
   const genderCls = p.gender==="m" ? " g-m" : p.gender==="f" ? " g-f" : "";
-  // Only a true ancestor-chain pivot (never a dim attached spouse or a
-  // sibling dead end, neither of which ever expand upward anyway) can
-  // meaningfully collapse - and only in the ancestor direction (gen<=0),
-  // since collapsing a descendant-side node wouldn't affect anything there.
-  const canCollapse = !n.dim && !n.deadEnd && n.gen<=0 && parentsOf(p).length>0;
+  // Only a true chain pivot (never a dim attached spouse or a sibling dead
+  // end, neither of which ever expand further themselves) can meaningfully
+  // collapse - and only if there's actually a branch on them to fold away,
+  // ancestors above or descendants below.
+  const canCollapse = !n.dim && !n.deadEnd && (parentsOf(p).length>0 || childrenOf(p.id).length>0);
   // Peeking into a collapsed branch (see click handler) shows it as a
   // normal node again, but p.collapsed itself is still true underneath -
   // the icon has to reflect THAT, not the temporary peek, or tapping it
@@ -1103,9 +1119,9 @@ function openPersonOptions(id){
   $("#optAnchorHint").textContent = isDefault
     ? "This is the tree's starting point, so it's always an anchor."
     : "Ancestors stop expanding automatically once they reach an anchor — tap it to explore further back instead.";
-  // Collapsing only makes sense once there's actually a branch above them
-  // to hide - nothing to fold away for someone with no recorded parents.
-  const canCollapse = parentsOf(p).length>0;
+  // Collapsing only makes sense once there's actually a branch to hide -
+  // ancestors above or descendants below.
+  const canCollapse = parentsOf(p).length>0 || childrenOf(p.id).length>0;
   $("#optCollapseWrap").hidden = !canCollapse;
   $("#optCollapseHint").hidden = !canCollapse;
   $("#optCollapse").checked = !!p.collapsed;

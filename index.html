@@ -141,20 +141,6 @@
   </form>
 </div>
 
-<!-- ============ SHEET: per-person options ============ -->
-<div class="sheet" id="personOptions" hidden>
-  <div class="scrim" data-closeoptions></div>
-  <div class="panel">
-    <h3 id="personOptionsTitle">Options</h3>
-    <label class="check"><input type="checkbox" id="optAnchor"> Anchor point</label>
-    <p class="hint" id="optAnchorHint">Ancestors stop expanding automatically once they reach an anchor — tap it to explore further back instead.</p>
-    <label class="check" id="optCollapseWrap" hidden><input type="checkbox" id="optCollapse"> Collapse this branch</label>
-    <label id="branchNameWrap" hidden>Branch name <input id="f-branchname" placeholder="e.g. The Smiths" maxlength="60"></label>
-    <p class="hint" id="optCollapseHint" hidden>Hides their whole branch - ancestors above and descendants below - behind one named box you can tap to peek into, handy for a side of the family you don't need to see by default.</p>
-    <div class="actions"><button type="button" class="ghost" data-closeoptions>Close</button></div>
-  </div>
-</div>
-
 <!-- ============ SHEET: resolve whose parents these are ============ -->
 <div class="sheet" id="resolveParents" hidden>
   <div class="scrim" data-closeresolve></div>
@@ -181,7 +167,6 @@
       <button type="button" class="ghost" id="setDefaultBtn">Set as everyone's starting point</button>
       <label class="check"><input type="checkbox" id="colorGenderToggle"> Color cards blue/pink by gender</label>
       <label class="check"><input type="checkbox" id="showMiddleToggle"> Show middle names</label>
-      <label class="check"><input type="checkbox" id="showAnchorToggle"> Show anchor point controls</label>
       <button type="button" class="ghost" id="switchBtn">Switch to another tree</button>
       <button type="button" class="danger-link" id="forgetBtn">Remove this tree from this device</button>
     </div>
@@ -190,6 +175,6 @@
 </div>
 
 <div class="toast" id="toast" hidden></div>
-<script type="module" src="app.js?v=31"></script>
+<script type="module" src="app.js?v=32"></script>
 </body>
 </html>

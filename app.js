@@ -312,11 +312,15 @@ const SLOT_W = 124, ROW_H = 148;
 // so a wide, distant branch takes less room instead of pushing the near
 // generations apart to fit it.
 function genScale(gen){
-  if(gen>=0) return 1;
-  const d = -gen;
-  if(d<=2) return 1;
-  if(d<=4) return 0.75;
-  if(d<=6) return 0.55;
+  // Ancestors never shrink, no matter how far back - the oldest
+  // generations on record stay full size even zoomed all the way out.
+  if(gen<0) return 1;
+  // Descendants shrink the further down they go, on top of (not instead
+  // of) the crowding-based compression in descWidth/placeDescendant - a
+  // deep branch needs an actual zoom-in to read.
+  if(gen<=2) return 1;
+  if(gen<=4) return 0.75;
+  if(gen<=6) return 0.55;
   return 0.4;
 }
 const isDivorced = (a, b) => !!(a && b && ((a.divorced||[]).includes(b.id) || (b.divorced||[]).includes(a.id)));
@@ -421,15 +425,13 @@ function kidGrandkidScale(nextScale, kidId){
 // reduced by id's own crowding. nextScale: the size id's OWN kids render
 // at, inherited from whoever decided ownScale (defaults to the same,
 // i.e. unreduced, until someone's own crowding first calls for less).
-// Unlike ancestors, descendants never shrink just for being many
-// generations down (see genScale) - an isolated branch with nothing
-// crowding it stays full size no matter how deep it goes, since there's
-// nothing here that actually needs the room back.
+// genScale(gen) layers a depth-based shrink on top of that, same as the
+// ancestor direction always had.
 function descWidth(id, gen, ownScale, nextScale){
   ownScale = ownScale==null ? 1 : ownScale;
   nextScale = nextScale==null ? ownScale : nextScale;
   const p = P(id);
-  const step = ownScale;
+  const step = ownScale*genScale(gen);
   const rowWidth = step*(1 + partnersOf(p).length);
   const kids = childrenOf(id);
   if(!kids.length) return Math.max(rowWidth, step);
@@ -606,7 +608,7 @@ function placeDescendant(placed, edges, id, xLeft, width, gen, ownScale, nextSca
   ownScale = ownScale==null ? 1 : ownScale;
   nextScale = nextScale==null ? ownScale : nextScale;
   const p = P(id);
-  const step = ownScale;
+  const step = ownScale*genScale(gen);
   const partners = partnersOf(p);
   // The pivot + their spouse(s) only need (1 + partners.length) slots, but
   // `width` can be wider than that to make room for grandchildren below -

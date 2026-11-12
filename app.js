@@ -350,8 +350,14 @@ function ancWidth(id, excludeSpouseId, extraPartnerId, gen){
   const folks = [p, ...sibs];
   // Every slot at this generation is `step` wide, not a flat 1, so a
   // distant row's own width shrinks right along with its on-screen size.
+  // A sibling (never the pivot - their own kids are the direct bloodline,
+  // placed separately) needs room for their OWN kids too now that cousins
+  // always show - same compression rules as any other branch, judged
+  // purely on that sibling's own subtree.
   const rowWidth = folks.reduce((sum,f)=> {
-    return sum + step*(1 + partnersOf(f).filter(s=>!(f.id===p.id && s.id===excludeSpouseId)).length + ((f.id===p.id && extraPartnerId)?1:0));
+    const own = step*(1 + partnersOf(f).filter(s=>!(f.id===p.id && s.id===excludeSpouseId)).length + ((f.id===p.id && extraPartnerId)?1:0));
+    if(f.id===p.id) return sum+own;
+    return sum + Math.max(own, descWidth(f.id, gen, step, step));
   }, 0);
   const {expand, suppressed} = splitParents(parentsOf(p));
   // a suppressed co-parent who IS already a registered spouse gets placed
@@ -502,7 +508,9 @@ function placeAncestor(placed, edges, id, excludeSpouseId, xLeft, width, gen, ex
   }
   const step = genScale(gen);
   const rowWidth = folks.reduce((sum,f)=> {
-    return sum + step*(1 + partnersOf(f.person).filter(s=>!(f.isPivot && s.id===excludeSpouseId)).length + ((f.isPivot && extraPartnerId)?1:0));
+    const own = step*(1 + partnersOf(f.person).filter(s=>!(f.isPivot && s.id===excludeSpouseId)).length + ((f.isPivot && extraPartnerId)?1:0));
+    if(f.isPivot) return sum+own;
+    return sum + Math.max(own, descWidth(f.person.id, gen, step, step));
   }, 0);
   // Centering this row purely within the space handed down from the child
   // below breaks once the pivot has many siblings: the pivot's own spot
@@ -558,11 +566,13 @@ function placeAncestor(placed, edges, id, excludeSpouseId, xLeft, width, gen, ex
       edges.push({childX, childGen:gen, parents:connected, adjacent:false, uncertain});
     }
 
+    const spouseXMap = new Map();
     partners.forEach(sp=>{
       const sx = posOf[sp.id];
       const divorced = isDivorced(person, sp), adj = adjacentX(x, sx, genScale(gen));
       placed.push({id:sp.id, x:sx, gen, dim:true, placeholder:!!sp.placeholder, deadEnd:true, divorced: divorced && !adj});
       edges.push({tie:true, a:{x, gen}, b:{x:sx, gen}, divorced: divorced && adj, scale:genScale(gen)});
+      spouseXMap.set(sp.id, sx);
       // a dim attached partner never expands further themselves, so their
       // own recorded parents (if any) would otherwise vanish with no trace.
       if(!sp.placeholder && (sp.parents||[]).length) edges.push({stub:true, x:sx, gen, scale:genScale(gen)});
@@ -574,6 +584,11 @@ function placeAncestor(placed, edges, id, excludeSpouseId, xLeft, width, gen, ex
       edges.push({tie:true, a:{x, gen}, b:{x:sx, gen}, divorced: divorced && adj, scale:genScale(gen)});
       if(!extra.placeholder && (extra.parents||[]).length) edges.push({stub:true, x:sx, gen, scale:genScale(gen)});
     }
+    // A sibling (never the pivot - their kids are the direct bloodline,
+    // traced separately via parentPos/connected above) is now a pivot in
+    // their own right one generation down: their kids are your cousins,
+    // and they always show, the same way anyone else's descendants do.
+    if(!f.isPivot) placeKidsBelow(placed, edges, person.id, x, gen, spouseXMap, step);
   });
   return pivotPos;
 }
@@ -760,6 +775,44 @@ function dockHtml(f){
     </div>
   </div>`;
 }
+// Places parentId's own kids one generation below parentGen, centered on
+// parentId's own x (and spouse(s), via spouseXMap) - shared by the current
+// root's own kids and every ancestor-direction sibling's kids (cousins
+// now always show, the same way an anchor's own descendants used to be
+// the only ones that did). Each kid renders full size as a sibling of
+// their own siblings; it's purely their OWN crowding (see descWidth) that
+// decides how much THEIR kids compress, never pooled with parentId's
+// other kids.
+function placeKidsBelow(placed, edges, parentId, parentX, parentGen, spouseXMap, baseScale){
+  baseScale = baseScale==null ? 1 : baseScale;
+  const kids = childrenOf(parentId).sort(byBorn);
+  if(!kids.length) return;
+  const widths = kids.map(k=>descWidth(k.id, parentGen+1, baseScale, baseScale));
+  const totalW = widths.reduce((a,b)=>a+b,0);
+  const spouseXs = [...spouseXMap.values()];
+  const coupleCenter = spouseXs.length ? [parentX, ...spouseXs].reduce((a,b)=>a+b,0)/(spouseXs.length+1) : parentX;
+  let cx = coupleCenter - totalW/2;
+  kids.forEach((k,i)=>{
+    const kpos = placeDescendant(placed, edges, k.id, cx, widths[i], parentGen+1, baseScale, baseScale);
+    const kp = P(k.id);
+    const parentPts = [{x:parentX, gen:parentGen}];
+    (kp.parents||[]).forEach(pid=>{ if(spouseXMap.has(pid)) parentPts.push({x:spouseXMap.get(pid), gen:parentGen}); });
+    // a single midpoint trunk only looks right when the two parents are
+    // actually sitting next to each other - same step they were placed
+    // with, unrelated to baseScale (that's about the kids, not them).
+    const adjacent = parentPts.length<2 || adjacentX(parentPts[0].x, parentPts[1].x, genScale(parentGen));
+    // don't overclaim whether this child or their own spouse is the
+    // actual blood descendant when that's on record as uncertain.
+    const uncertain = !!kp.parentsUncertain;
+    let childX = kpos.x;
+    if(uncertain){
+      const partnerXs = partnersOf(kp).map(sp=>{ const n = placed.find(pn=>pn.id===sp.id && pn.gen===kpos.gen); return n ? n.x : null; }).filter(v=>v!=null);
+      if(partnerXs.length) childX = [kpos.x, ...partnerXs].reduce((a,b)=>a+b,0)/(partnerXs.length+1);
+    }
+    edges.push({childX, childGen:kpos.gen, parents:parentPts, adjacent, uncertain});
+    cx += widths[i];
+  });
+}
 function renderPedigree(){
   if(!people.size){
     return `<div class="empty"><h2>Start your tree</h2><p>Add yourself or the oldest relative you know. Then add their parents, partners and children from their card.</p><button class="primary" data-add="root">Add the first person</button></div>`;
@@ -779,38 +832,7 @@ function renderPedigree(){
   const focalSpouseX = new Map();
   partnersOf(root).forEach(sp=>{ const n = placed.find(x=>x.id===sp.id); if(n) focalSpouseX.set(sp.id, n.x); });
 
-  const kids = childrenOf(root.id).sort(byBorn);
-  if(kids.length){
-    // Root's own kids all render full size, and each of THEM independently
-    // judges their own crowding for their own grandkids (see descWidth) -
-    // root itself has no siblings of its own to pool with, so it hands
-    // down an unreduced scale rather than deciding anything on their behalf.
-    const widths = kids.map(k=>descWidth(k.id, 1, 1, 1));
-    const totalW = widths.reduce((a,b)=>a+b,0);
-    // center on the root+spouse couple's own midpoint, same as inside
-    // placeDescendant, so a spouse doesn't pull the whole fan off-center.
-    const spouseXs = [...focalSpouseX.values()];
-    const coupleCenter = spouseXs.length ? [focalPos.x, ...spouseXs].reduce((a,b)=>a+b,0)/(spouseXs.length+1) : focalPos.x;
-    let cx = coupleCenter - totalW/2;
-    kids.forEach((k,i)=>{
-      const kpos = placeDescendant(placed, edges, k.id, cx, widths[i], 1, 1, 1);
-      const kp = P(k.id);
-      const parentPts = [{x:focalPos.x, gen:0}];
-      (kp.parents||[]).forEach(pid=>{ if(focalSpouseX.has(pid)) parentPts.push({x:focalSpouseX.get(pid), gen:0}); });
-      // same reasoning as the matching spot in placeDescendant - only
-      // trunk the two parents together when they're actually adjacent.
-      const adjacent = parentPts.length<2 || adjacentX(parentPts[0].x, parentPts[1].x, genScale(0));
-      // same "don't overclaim" rule as placeDescendant/placeAncestor.
-      const uncertain = !!kp.parentsUncertain;
-      let childX = kpos.x;
-      if(uncertain){
-        const partnerXs = partnersOf(kp).map(sp=>{ const n = placed.find(pn=>pn.id===sp.id && pn.gen===kpos.gen); return n ? n.x : null; }).filter(v=>v!=null);
-        if(partnerXs.length) childX = [kpos.x, ...partnerXs].reduce((a,b)=>a+b,0)/(partnerXs.length+1);
-      }
-      edges.push({childX, childGen:kpos.gen, parents:parentPts, adjacent, uncertain});
-      cx += widths[i];
-    });
-  }
+  placeKidsBelow(placed, edges, root.id, focalPos.x, 0, focalSpouseX);
 
   const xs = placed.map(n=>n.x), gens = placed.map(n=>n.gen);
   const minX = Math.min(...xs), maxX = Math.max(...xs), minGen = Math.min(...gens), maxGen = Math.max(...gens);

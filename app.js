@@ -539,8 +539,18 @@ function placeAncestor(placed, edges, id, excludeSpouseId, xLeft, width, gen, ex
     const partners = partnersOf(person).filter(s=>!(f.isPivot && s.id===excludeSpouseId));
     const extra = (f.isPivot && extraPartnerId) ? P(extraPartnerId) : null;
     const unitIds = sortIdsByGender([person.id, ...partners.map(s=>s.id), ...(extra?[extra.id]:[])]);
+    // A sibling with their own crowded cousin-fan below needs that much
+    // room reserved HERE too, in the row itself, or the fan spills into
+    // whoever's slotted in next to them - same width ancWidth already
+    // promised this row would have (the pivot's own kids aren't placed
+    // in this row at all, so they never need the extra).
+    const unitWidth = step*unitIds.length;
+    const descW = f.isPivot ? 0 : descWidth(person.id, gen, step, step);
+    const neededWidth = Math.max(unitWidth, descW);
+    const unitLeft = cursor + (neededWidth-unitWidth)/2;
     const posOf = {};
-    unitIds.forEach(uid => { posOf[uid] = cursor+step/2; cursor += step; });
+    unitIds.forEach((uid,i) => { posOf[uid] = unitLeft + step*i + step/2; });
+    cursor += neededWidth;
 
     const x = posOf[person.id];
     placed.push({id:person.id, x, gen, half:f.half, placeholder:!!person.placeholder, deadEnd:!f.isPivot});

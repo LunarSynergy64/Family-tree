@@ -35,7 +35,7 @@ service cloud.firestore {
       return validId(id) && exists(/databases/$(database)/documents/trees/$(id));
     }
     function validPerson(p) {
-      return p.keys().hasOnly(['name', 'firstName', 'middleName', 'lastName', 'maidenName', 'gender', 'born', 'bornMonth', 'bornDay', 'died', 'diedMonth', 'diedDay', 'place', 'note', 'parents', 'spouses', 'notPartnerWith', 'divorced', 'updated', 'placeholder', 'parentsUncertain'])
+      return p.keys().hasOnly(['name', 'firstName', 'middleName', 'lastName', 'maidenName', 'gender', 'born', 'bornMonth', 'bornDay', 'died', 'diedMonth', 'diedDay', 'place', 'note', 'parents', 'spouses', 'notPartnerWith', 'divorced', 'updated', 'placeholder', 'parentsUncertain', 'layoutDx', 'layoutDy', 'layoutScale'])
         && p.name is string && p.name.size() <= 200
         && (!('firstName' in p) || (p.firstName is string && p.firstName.size() <= 100))
         && (!('middleName' in p) || (p.middleName is string && p.middleName.size() <= 100))
@@ -45,6 +45,9 @@ service cloud.firestore {
         && (!('note' in p) || (p.note is string && p.note.size() <= 5000))
         && (!('placeholder' in p) || p.placeholder is bool)
         && (!('parentsUncertain' in p) || p.parentsUncertain is bool)
+        && (!('layoutDx' in p) || p.layoutDx is number)
+        && (!('layoutDy' in p) || p.layoutDy is number)
+        && (!('layoutScale' in p) || (p.layoutScale is number && p.layoutScale > 0))
         && p.parents is list && p.parents.size() <= 2
         && p.spouses is list && p.spouses.size() <= 20
         && (!('notPartnerWith' in p) || (p.notPartnerWith is list && p.notPartnerWith.size() <= 20))

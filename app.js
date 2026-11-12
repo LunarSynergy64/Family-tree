@@ -73,6 +73,19 @@ let unsub = null;
 let people = new Map(), focusId = null, trail = [], view = "tree", loaded = false, query = "", offlineNote = "";
 let sheetMode = null;
 let editCoParents = [], editFormalSpouses = [];
+// Manual layout editing: a toggleable mode where tapping a box selects it
+// (tap again to deselect; tap several to build a group) and dragging a
+// selected box moves every selected box together by the same amount - or,
+// if nothing's selected yet, dragging a box just moves that one. Offsets
+// and size overrides are saved per person (layoutDx/layoutDy/layoutScale),
+// shared for everyone, same as everything else in the tree.
+let editLayout = false;
+let selectedIds = new Set();
+function offsetOf(id){
+  if(!id) return {dx:0, dy:0};
+  const p = P(id);
+  return {dx:(p&&p.layoutDx)||0, dy:(p&&p.layoutDy)||0};
+}
 const app = $("#app");
 const P = id => people.get(id);
 if(keyGet("ft-colorgender")!=="0") app.classList.add("color-gender");
@@ -223,6 +236,9 @@ async function put(p){
   };
   if(p.placeholder && !data.name) data.placeholder = true;
   if(p.parentsUncertain) data.parentsUncertain = true;
+  if(p.layoutDx) data.layoutDx = p.layoutDx;
+  if(p.layoutDy) data.layoutDy = p.layoutDy;
+  if(p.layoutScale) data.layoutScale = p.layoutScale;
   people.set(p.id, {id:p.id, ...data});
   try { await setDoc(doc(fs, "trees", tree.key, "people", p.id), data); return true; }
   catch(e){ toast("That change didn't save (" + (e.code||"error") + "). Try again."); return false; }
@@ -482,7 +498,7 @@ function placeAncestor(placed, edges, id, excludeSpouseId, xLeft, width, gen, ex
     if(expand.length===2 && !(expand[0].notPartnerWith||[]).includes(expand[1].id)){
       const divorced = isDivorced(expand[0], expand[1]);
       const adj = adjacentX(parentPos[0].x, parentPos[1].x, genScale(gen-1));
-      edges.push({tie:true, a:parentPos[0], b:parentPos[1], divorced: divorced && adj, scale:genScale(gen-1)});
+      edges.push({tie:true, a:parentPos[0], b:parentPos[1], aId:expand[0].id, bId:expand[1].id, divorced: divorced && adj, scale:genScale(gen-1)});
       // each parent here is the pivot of their own, possibly-wide ancestor
       // fork (siblings, an attached spouse of their own) - when they're
       // not sitting right next to each other, that line runs straight
@@ -559,12 +575,15 @@ function placeAncestor(placed, edges, id, excludeSpouseId, xLeft, width, gen, ex
     if(f.isPivot) pivotPos = {x, gen};
 
     const myParents = person.parents||[];
-    const connected = parentPos.filter((pp,i)=> myParents.includes(expand[i].id)).map(pp=>({x:pp.x, gen:pp.gen}));
+    const connected = parentPos
+      .map((pp,i)=>({pp, parId:expand[i].id}))
+      .filter(({parId})=> myParents.includes(parId))
+      .map(({pp,parId})=>({x:pp.x, gen:pp.gen, id:parId}));
     // A node with recorded parents that aren't being drawn here (simply
     // never expanded past this dead end) is easy to mistake for "nothing
     // more was ever entered" - a short grayed stub reaching up into the
     // empty gap above says otherwise.
-    if(!person.placeholder && myParents.length && !connected.length) edges.push({stub:true, x, gen, scale:genScale(gen)});
+    if(!person.placeholder && myParents.length && !connected.length) edges.push({stub:true, x, gen, id:person.id, scale:genScale(gen)});
     // these two parents are each their own independently-placed ancestor
     // fork, so they may not sit next to each other - never collapse them
     // to a single midpoint trunk (adjacent:false forces a stub per parent).
@@ -575,7 +594,8 @@ function placeAncestor(placed, edges, id, excludeSpouseId, xLeft, width, gen, ex
       // shouldn't claim more certainty than is actually known.
       const uncertain = !!person.parentsUncertain;
       const childX = uncertain && partners.length ? [x, ...partners.map(sp=>posOf[sp.id])].reduce((a,b)=>a+b,0)/(partners.length+1) : x;
-      edges.push({childX, childGen:gen, parents:connected, adjacent:false, uncertain});
+      const childId = (uncertain && partners.length) ? null : person.id;
+      edges.push({childX, childGen:gen, childId, parents:connected, adjacent:false, uncertain});
     }
 
     const spouseXMap = new Map();
@@ -583,18 +603,18 @@ function placeAncestor(placed, edges, id, excludeSpouseId, xLeft, width, gen, ex
       const sx = posOf[sp.id];
       const divorced = isDivorced(person, sp), adj = adjacentX(x, sx, genScale(gen));
       placed.push({id:sp.id, x:sx, gen, dim:true, placeholder:!!sp.placeholder, deadEnd:true, divorced: divorced && !adj});
-      edges.push({tie:true, a:{x, gen}, b:{x:sx, gen}, divorced: divorced && adj, scale:genScale(gen)});
+      edges.push({tie:true, a:{x, gen}, b:{x:sx, gen}, aId:person.id, bId:sp.id, divorced: divorced && adj, scale:genScale(gen)});
       spouseXMap.set(sp.id, sx);
       // a dim attached partner never expands further themselves, so their
       // own recorded parents (if any) would otherwise vanish with no trace.
-      if(!sp.placeholder && (sp.parents||[]).length) edges.push({stub:true, x:sx, gen, scale:genScale(gen)});
+      if(!sp.placeholder && (sp.parents||[]).length) edges.push({stub:true, x:sx, gen, id:sp.id, scale:genScale(gen)});
     });
     if(extra){
       const sx = posOf[extra.id];
       const divorced = isDivorced(person, extra), adj = adjacentX(x, sx, genScale(gen));
       placed.push({id:extra.id, x:sx, gen, dim:true, placeholder:!!extra.placeholder, deadEnd:true, divorced: divorced && !adj});
-      edges.push({tie:true, a:{x, gen}, b:{x:sx, gen}, divorced: divorced && adj, scale:genScale(gen)});
-      if(!extra.placeholder && (extra.parents||[]).length) edges.push({stub:true, x:sx, gen, scale:genScale(gen)});
+      edges.push({tie:true, a:{x, gen}, b:{x:sx, gen}, aId:person.id, bId:extra.id, divorced: divorced && adj, scale:genScale(gen)});
+      if(!extra.placeholder && (extra.parents||[]).length) edges.push({stub:true, x:sx, gen, id:extra.id, scale:genScale(gen)});
     }
     // A sibling (never the pivot - their kids are the direct bloodline,
     // traced separately via parentPos/connected above) is now a pivot in
@@ -628,12 +648,12 @@ function placeDescendant(placed, edges, id, xLeft, width, gen, ownScale, nextSca
     const sx = posOf[sp.id];
     const divorced = isDivorced(p, sp), adj = adjacentX(x, sx, step);
     placed.push({id:sp.id, x:sx, gen, dim:true, placeholder:!!sp.placeholder, deadEnd:true, divorced: divorced && !adj, scale:step});
-    edges.push({tie:true, a:{x, gen}, b:{x:sx, gen}, divorced: divorced && adj, scale:step});
+    edges.push({tie:true, a:{x, gen}, b:{x:sx, gen}, aId:p.id, bId:sp.id, divorced: divorced && adj, scale:step});
     spouseX.set(sp.id, sx);
     // A spouse married in on the way down never gets their own ancestry
     // expanded (same as the ancestor-direction dim attachment) - without
     // this, their recorded parents just silently vanish with no trace.
-    if(!sp.placeholder && (sp.parents||[]).length) edges.push({stub:true, x:sx, gen, scale:step});
+    if(!sp.placeholder && (sp.parents||[]).length) edges.push({stub:true, x:sx, gen, id:sp.id, scale:step});
   });
 
   const kids = childrenOf(id).sort(byBorn);
@@ -653,8 +673,8 @@ function placeDescendant(placed, edges, id, xLeft, width, gen, ownScale, nextSca
     kids.forEach((k,i)=>{
       const kpos = placeDescendant(placed, edges, k.id, cx, widths[i], gen+1, nextScale, kidScales[i]);
       const kp = P(k.id);
-      const parentPts = [{x, gen}];
-      (kp.parents||[]).forEach(pid=>{ if(spouseX.has(pid)) parentPts.push({x:spouseX.get(pid), gen}); });
+      const parentPts = [{x, gen, id:p.id}];
+      (kp.parents||[]).forEach(pid=>{ if(spouseX.has(pid)) parentPts.push({x:spouseX.get(pid), gen, id:pid}); });
       // a single midpoint trunk only looks right when the two parents are
       // actually sitting next to each other - with more than one partner
       // in the row, the matched one might be further off, and averaging
@@ -671,7 +691,8 @@ function placeDescendant(placed, edges, id, xLeft, width, gen, ownScale, nextSca
         const partnerXs = partnersOf(kp).map(sp=>{ const n = placed.find(pn=>pn.id===sp.id && pn.gen===kpos.gen); return n ? n.x : null; }).filter(v=>v!=null);
         if(partnerXs.length) childX = [kpos.x, ...partnerXs].reduce((a,b)=>a+b,0)/(partnerXs.length+1);
       }
-      edges.push({childX, childGen:kpos.gen, parents:parentPts, adjacent, uncertain});
+      const childId = uncertain ? null : k.id;
+      edges.push({childX, childGen:kpos.gen, childId, parents:parentPts, adjacent, uncertain});
       cx += widths[i];
     });
   }
@@ -681,7 +702,7 @@ function placeDescendant(placed, edges, id, xLeft, width, gen, ownScale, nextSca
    child belongs to), so a couple - or a single known parent - gets one
    shared trunk down to one bus line, with each child hanging off it by a
    short stub, rather than a separate line to every parent individually. */
-function renderEdges(edges, px, py){
+function renderEdges(edges, px, py, pxAdj, pyAdj){
   let svg = "";
   const groups = new Map();
   edges.forEach(e=>{
@@ -692,13 +713,14 @@ function renderEdges(edges, px, py){
       // claiming to show an actual connection to anyone specific. Sized
       // to the node it's attached to, same as the divorce X below, or it
       // reads as oversized - and could even reach past a heavily
-      // compressed row's own shrunk gap above it.
-      const x1 = px(e.x), yTop = py(e.gen), sc = e.scale!=null ? e.scale : 1;
+      // compressed row's own shrunk gap above it. Follows the node's own
+      // manual drag offset (if any), same as everything else here.
+      const x1 = pxAdj(e.id, e.x), yTop = pyAdj(e.id, e.gen), sc = e.scale!=null ? e.scale : 1;
       svg += `<line x1="${x1.toFixed(1)}" y1="${(yTop-30*sc).toFixed(1)}" x2="${x1.toFixed(1)}" y2="${(yTop-58*sc).toFixed(1)}" class="stub-line"/>`;
       return;
     }
     if(e.tie){
-      const x1=px(e.a.x), y1=py(e.a.gen), x2=px(e.b.x), y2=py(e.b.gen);
+      const x1=pxAdj(e.aId,e.a.x), y1=pyAdj(e.aId,e.a.gen), x2=pxAdj(e.bId,e.b.x), y2=pyAdj(e.bId,e.b.gen);
       svg += `<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" class="tie-line"/>`;
       if(e.divorced){
         const mx=(x1+x2)/2, my=(y1+y2)/2, s=6*(e.scale!=null ? e.scale : 1);
@@ -709,36 +731,40 @@ function renderEdges(edges, px, py){
     }
     const key = e.parents.map(p=>p.x+","+p.gen).sort().join("|");
     if(!groups.has(key)) groups.set(key, {parents:e.parents, children:[], adjacent:e.adjacent});
-    groups.get(key).children.push({x:e.childX, gen:e.childGen, uncertain:e.uncertain});
+    groups.get(key).children.push({x:e.childX, gen:e.childGen, id:e.childId, uncertain:e.uncertain});
   });
   groups.forEach(g=>{
-    const parentY = py(g.parents[0].gen);
+    // Row heights stay structural (based on the un-dragged, computed
+    // positions) so the shared bus line never tilts just because one
+    // relative got manually moved - but every actual line endpoint below
+    // follows that specific person's own position, dragged or not, so a
+    // moved box never looks disconnected from its own line.
+    const baseParentY = py(g.parents[0].gen), baseChildY = py(g.children[0].gen);
+    const busY = baseParentY + (baseChildY-baseParentY)*0.6;
+    const parentPtsAdj = g.parents.map(p=>({x:pxAdj(p.id,p.x), y:pyAdj(p.id,p.gen)}));
     // A couple that's always placed right next to each other (an attached
     // spouse, or any case marked adjacent) reads better as one clean trunk
     // from their shared midpoint. Two parents who are each their own
     // independently-placed ancestor fork (adjacent:false) might not be
     // anywhere near each other, so the midpoint could land on an unrelated
     // person sitting between them - give those a stub per parent instead.
-    const uniqueXs = [...new Set(g.parents.map(p=>px(p.x)))];
-    const parentPx = (g.adjacent && uniqueXs.length>1)
-      ? [uniqueXs.reduce((a,b)=>a+b,0)/uniqueXs.length]
-      : uniqueXs;
-    const childY = py(g.children[0].gen);
-    const busY = parentY + (childY-parentY)*0.6;
-    const childPx = g.children.map(c=>px(c.x));
-    const allX = [...parentPx, ...childPx];
+    const uniqueXs = [...new Set(parentPtsAdj.map(pt=>pt.x))];
+    const trunkPts = (g.adjacent && uniqueXs.length>1)
+      ? [{x: uniqueXs.reduce((a,b)=>a+b,0)/uniqueXs.length, y: parentPtsAdj.reduce((s,pt)=>s+pt.y,0)/parentPtsAdj.length}]
+      : parentPtsAdj.filter((pt,i)=>uniqueXs.indexOf(pt.x)===i);
+    const childPtsAdj = g.children.map(c=>({x:pxAdj(c.id,c.x), y:pyAdj(c.id,c.gen), uncertain:c.uncertain}));
+    const allX = [...trunkPts.map(p=>p.x), ...childPtsAdj.map(p=>p.x)];
     const minX = Math.min(...allX), maxX = Math.max(...allX);
-    parentPx.forEach(x1 => {
-      svg += `<line x1="${x1.toFixed(1)}" y1="${parentY.toFixed(1)}" x2="${x1.toFixed(1)}" y2="${busY.toFixed(1)}" class="fam-line"/>`;
+    trunkPts.forEach(pt => {
+      svg += `<line x1="${pt.x.toFixed(1)}" y1="${pt.y.toFixed(1)}" x2="${pt.x.toFixed(1)}" y2="${busY.toFixed(1)}" class="fam-line"/>`;
     });
     if(maxX>minX) svg += `<line x1="${minX.toFixed(1)}" y1="${busY.toFixed(1)}" x2="${maxX.toFixed(1)}" y2="${busY.toFixed(1)}" class="fam-line"/>`;
-    g.children.forEach((c,i)=>{
+    childPtsAdj.forEach(c=>{
       const cls = c.uncertain ? "fam-line uncertain" : "fam-line";
-      const cy = py(c.gen);
-      svg += `<line x1="${childPx[i].toFixed(1)}" y1="${busY.toFixed(1)}" x2="${childPx[i].toFixed(1)}" y2="${cy.toFixed(1)}" class="${cls}"/>`;
+      svg += `<line x1="${c.x.toFixed(1)}" y1="${busY.toFixed(1)}" x2="${c.x.toFixed(1)}" y2="${c.y.toFixed(1)}" class="${cls}"/>`;
       // a dashed line alone reads as "incomplete data" rather than "unsure
       // whose child" - the "?" is what actually says that.
-      if(c.uncertain) svg += `<text x="${childPx[i].toFixed(1)}" y="${((busY+cy)/2+4).toFixed(1)}" class="uncertain-q" text-anchor="middle">?</text>`;
+      if(c.uncertain) svg += `<text x="${c.x.toFixed(1)}" y="${((busY+c.y)/2+4).toFixed(1)}" class="uncertain-q" text-anchor="middle">?</text>`;
     });
   });
   return svg;
@@ -751,10 +777,17 @@ function bubbleHtml(n, x, y){
   // own generation sits from the focal point. Descendants carry their own
   // precomputed scale (branch crowding folded in, see descWidth) -
   // ancestors don't have that yet, so they still fall back to the plain
-  // per-generation curve.
-  const scale = n.id===focusId ? 1 : (n.scale!=null ? n.scale : genScale(n.gen));
-  const scaleStyle = scale<1 ? `--ns:${scale.toFixed(2)};` : "";
-  if(p.placeholder) return `<button class="node ph" style="left:${x}px;top:${y}px;${scaleStyle}" data-go="${esc(n.id)}">Unknown</button>`;
+  // per-generation curve. A manual resize (set while in Edit Layout mode)
+  // always wins over all of that - the user's own explicit choice.
+  const autoScale = n.id===focusId ? 1 : (n.scale!=null ? n.scale : genScale(n.gen));
+  const scale = p.layoutScale!=null ? p.layoutScale : autoScale;
+  const scaleStyle = `--ns:${scale.toFixed(3)};`;
+  const selected = editLayout && selectedIds.has(n.id);
+  const selCls = selected ? " selected" : "";
+  // Only a selected box gets a resize handle, and only in Edit Layout mode
+  // - otherwise it'd just be a stray dot cluttering every normal view.
+  const handle = selected ? `<span class="resizeHandle" data-resize="${esc(n.id)}"></span>` : "";
+  if(p.placeholder) return `<button class="node ph${selCls}" style="left:${x}px;top:${y}px;${scaleStyle}" data-go="${esc(n.id)}" data-scale="${scale.toFixed(3)}">Unknown${handle}</button>`;
   // A sibling or dead-end spouse never expands further themselves - this
   // just signals there's recorded family beyond this dead end, tappable
   // (re-centering the grid on them) to actually see it.
@@ -767,11 +800,12 @@ function bubbleHtml(n, x, y){
   const uncertainBadge = (p.parentsUncertain && uncertainPartner)
     ? ` <span class="uncertainBadge" data-resolve="${esc(p.id)}" title="${esc(`Not sure if these are ${displayName(p)||"their"}'s parents or ${displayName(uncertainPartner)||"their partner"}'s - tap to say for sure`)}">?</span>`
     : "";
-  return `<button class="node${n.dim?" dim":""}${n.id===focusId?" me":""}${more?" more":""}${genderCls}" style="left:${x}px;top:${y}px;${scaleStyle}" data-go="${esc(n.id)}">
+  return `<button class="node${n.dim?" dim":""}${n.id===focusId?" me":""}${more?" more":""}${genderCls}${selCls}" style="left:${x}px;top:${y}px;${scaleStyle}" data-go="${esc(n.id)}" data-scale="${scale.toFixed(3)}">
     <span class="nm">${esc(displayName(p)||"Unnamed")}${n.divorced?` <span class="divorcedBadge" title="Divorced">✕</span>`:""}${uncertainBadge}</span>
     ${p.maidenName?`<span class="maiden">(${esc(p.maidenName)})</span>`:""}
     <span class="yrs${birthKnown(p)?"":" unk"}">${esc(birthLabel(p))}</span>
     ${n.half?`<span class="chip">half</span>`:""}
+    ${handle}
   </button>`;
 }
 function dockHtml(f){
@@ -807,8 +841,8 @@ function placeKidsBelow(placed, edges, parentId, parentX, parentGen, spouseXMap,
   kids.forEach((k,i)=>{
     const kpos = placeDescendant(placed, edges, k.id, cx, widths[i], parentGen+1, baseScale, baseScale);
     const kp = P(k.id);
-    const parentPts = [{x:parentX, gen:parentGen}];
-    (kp.parents||[]).forEach(pid=>{ if(spouseXMap.has(pid)) parentPts.push({x:spouseXMap.get(pid), gen:parentGen}); });
+    const parentPts = [{x:parentX, gen:parentGen, id:parentId}];
+    (kp.parents||[]).forEach(pid=>{ if(spouseXMap.has(pid)) parentPts.push({x:spouseXMap.get(pid), gen:parentGen, id:pid}); });
     // a single midpoint trunk only looks right when the two parents are
     // actually sitting next to each other - same step they were placed
     // with, unrelated to baseScale (that's about the kids, not them).
@@ -821,7 +855,8 @@ function placeKidsBelow(placed, edges, parentId, parentX, parentGen, spouseXMap,
       const partnerXs = partnersOf(kp).map(sp=>{ const n = placed.find(pn=>pn.id===sp.id && pn.gen===kpos.gen); return n ? n.x : null; }).filter(v=>v!=null);
       if(partnerXs.length) childX = [kpos.x, ...partnerXs].reduce((a,b)=>a+b,0)/(partnerXs.length+1);
     }
-    edges.push({childX, childGen:kpos.gen, parents:parentPts, adjacent, uncertain});
+    const childId = uncertain ? null : k.id;
+    edges.push({childX, childGen:kpos.gen, childId, parents:parentPts, adjacent, uncertain});
     cx += widths[i];
   });
 }
@@ -851,8 +886,15 @@ function renderPedigree(){
   // Generous padding on every side, not just enough to fit the content -
   // gives real room to grab the background and pan around (especially
   // above the topmost row, which used to sit flush against the edge with
-  // nowhere to drag to) and keeps zooming out from feeling cramped.
-  const PAD_X = 220, PAD_Y = 220;
+  // nowhere to drag to) and keeps zooming out from feeling cramped. A
+  // further fixed allowance (DRAG_ROOM) covers manual drags in Edit
+  // Layout mode - fixed rather than grown to fit however far someone's
+  // currently dragged, since the pedigree box is centered (margin:auto)
+  // whenever a tree is narrower than the viewport: a box size that reacts
+  // to the drag itself would recenter out from under the very box being
+  // dragged, making it visually lag or race ahead of the mouse.
+  const DRAG_ROOM = 260;
+  const PAD_X = 220 + DRAG_ROOM, PAD_Y = 220 + DRAG_ROOM;
   const px = x => (x-minX)*SLOT_W + PAD_X;
   // A shrunk row sitting a full, un-shrunk ROW_H away from its parent
   // reads as "freakishly far away" rather than small - the gap between
@@ -874,11 +916,13 @@ function renderPedigree(){
     rowY.set(g1, rowY.get(g0) + ROW_H*((s0+s1)/2)*(g1-g0));
   }
   const py = g => (rowY.get(g)||0) + PAD_Y;
+  const pxAdj = (id, x) => px(x) + offsetOf(id).dx;
+  const pyAdj = (id, gen) => py(gen) + offsetOf(id).dy;
   const width = (maxX-minX)*SLOT_W + PAD_X*2;
   const height = (rowY.get(maxGen)||0) + PAD_Y*2 + 170;
 
-  const linesHtml = renderEdges(edges, px, py);
-  const nodesHtml = placed.map(n => bubbleHtml(n, px(n.x), py(n.gen))).join("");
+  const linesHtml = renderEdges(edges, px, py, pxAdj, pyAdj);
+  const nodesHtml = placed.map(n => bubbleHtml(n, pxAdj(n.id,n.x), pyAdj(n.id,n.gen))).join("");
 
   const selected = P(focusId);
   return `<div class="pedigree" style="width:${width}px;height:${height}px">
@@ -1242,8 +1286,99 @@ function onPanEnd(){
   document.removeEventListener("mousemove", onPanMove);
   document.removeEventListener("mouseup", onPanEnd);
 }
+
+/* ================= Edit Layout: drag to move, drag the dot to resize =====
+   Only active while editLayout is on. Dragging a node moves it (and every
+   other currently-selected node, by the same amount) - the move is applied
+   live via a CSS transform on the actual DOM nodes (no re-render mid-drag,
+   so it stays smooth), then persisted to Firestore once the drag ends.
+   Connector lines re-snap onto the new position on that final render. */
+let layoutDrag = null;
+function startLayoutDrag(e, id){
+  const ids = selectedIds.has(id) ? [...selectedIds] : [id];
+  const startOffsets = new Map(ids.map(i=>{ const o=offsetOf(i); return [i, {dx:o.dx, dy:o.dy}]; }));
+  layoutDrag = {ids, startX:e.clientX, startY:e.clientY, startOffsets, moved:false};
+  document.addEventListener("mousemove", onLayoutDragMove);
+  document.addEventListener("mouseup", onLayoutDragEnd);
+}
+function onLayoutDragMove(e){
+  if(!layoutDrag) return;
+  const dx = (e.clientX-layoutDrag.startX)/zoom, dy = (e.clientY-layoutDrag.startY)/zoom;
+  if(!layoutDrag.moved && (Math.abs(dx)>3 || Math.abs(dy)>3)) layoutDrag.moved = true;
+  if(!layoutDrag.moved) return;
+  layoutDrag.ids.forEach(id=>{
+    const el = $(`.node[data-go="${id}"]`); if(!el) return;
+    el.style.setProperty("--dragx", dx+"px");
+    el.style.setProperty("--dragy", dy+"px");
+  });
+}
+async function onLayoutDragEnd(e){
+  document.removeEventListener("mousemove", onLayoutDragMove);
+  document.removeEventListener("mouseup", onLayoutDragEnd);
+  const ld = layoutDrag; layoutDrag = null;
+  if(!ld) return;
+  if(!ld.moved) return; // a plain click - the click handler's select/deselect runs instead
+  dragged = true; // swallow the click that follows this mouseup, same as background panning does
+  const dx = (e.clientX-ld.startX)/zoom, dy = (e.clientY-ld.startY)/zoom;
+  for(const id of ld.ids){
+    const p = P(id); if(!p) continue;
+    const base = ld.startOffsets.get(id);
+    await put({...p, layoutDx: Math.round(base.dx+dx), layoutDy: Math.round(base.dy+dy)});
+  }
+  render();
+}
+let resizeDrag = null;
+function startResize(e, id){
+  e.preventDefault(); e.stopPropagation();
+  const ids = selectedIds.has(id) ? [...selectedIds] : [id];
+  const startScale = new Map(ids.map(i=>{
+    const el = $(`.node[data-go="${i}"]`);
+    return [i, el ? parseFloat(el.dataset.scale)||1 : 1];
+  }));
+  resizeDrag = {ids, startY:e.clientY, startScale};
+  document.addEventListener("mousemove", onResizeMove);
+  document.addEventListener("mouseup", onResizeEnd);
+}
+function resizeRatio(e){
+  const dy = (e.clientY-resizeDrag.startY)/zoom;
+  return Math.max(0.3, Math.min(2.5, 1 + dy/80));
+}
+function onResizeMove(e){
+  if(!resizeDrag) return;
+  const ratio = resizeRatio(e);
+  resizeDrag.ids.forEach(id=>{
+    const el = $(`.node[data-go="${id}"]`); if(!el) return;
+    el.style.setProperty("--ns", (resizeDrag.startScale.get(id)*ratio).toFixed(3));
+  });
+}
+async function onResizeEnd(e){
+  document.removeEventListener("mousemove", onResizeMove);
+  document.removeEventListener("mouseup", onResizeEnd);
+  const rd = resizeDrag; resizeDrag = null;
+  if(!rd) return;
+  dragged = true;
+  const ratio = resizeRatio(e);
+  for(const id of rd.ids){
+    const p = P(id); if(!p) continue;
+    await put({...p, layoutScale: +(rd.startScale.get(id)*ratio).toFixed(3)});
+  }
+  render();
+}
+$("#editLayoutBtn").addEventListener("click", () => {
+  editLayout = !editLayout;
+  selectedIds.clear();
+  $("#editLayoutBtn").setAttribute("aria-pressed", String(editLayout));
+  app.classList.toggle("editingLayout", editLayout);
+  if(editLayout) toast("Tap boxes to select, drag to move them together. Drag the dot to resize. Tap ✎ again when done.");
+  render();
+});
+
 app.addEventListener("mousedown", e => {
   if(view!=="tree" || e.button!==0) return;
+  const handle = e.target.closest("[data-resize]");
+  if(editLayout && handle) return startResize(e, handle.dataset.resize);
+  const nodeEl = e.target.closest(".node");
+  if(editLayout && nodeEl){ e.preventDefault(); return startLayoutDrag(e, nodeEl.dataset.go); }
   if(e.target.closest(".node") || e.target.closest(".dock")) return;
   panState = {x:e.clientX, y:e.clientY, left:app.scrollLeft, top:app.scrollTop};
   dragged = false;
@@ -1264,6 +1399,19 @@ app.addEventListener("wheel", e => {
 /* ================= events ================= */
 document.addEventListener("click", e => {
   if(dragged){ dragged = false; e.stopPropagation(); e.preventDefault(); return; }
+  if(editLayout){
+    if(e.target.closest("[data-resize]")) return;
+    const node = e.target.closest(".node");
+    if(node){
+      const id = node.dataset.go;
+      if(selectedIds.has(id)) selectedIds.delete(id); else selectedIds.add(id);
+      return render();
+    }
+    if(!e.target.closest(".dock") && !e.target.closest(".zoomCtl")){
+      if(selectedIds.size){ selectedIds.clear(); render(); }
+      return;
+    }
+  }
   // The uncertain-parents "?" sits inside a [data-go] node button, so it
   // has to be checked first - otherwise tapping it would also fire the
   // node's own navigate behavior underneath it.

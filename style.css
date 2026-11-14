@@ -73,6 +73,7 @@ main{max-width:1400px;margin:0 auto;padding:18px var(--gutter-r) calc(48px + env
 .zoomCtl button{width:36px;height:36px;border-radius:999px;border:1px solid var(--line);background:var(--card);font-size:1.1rem;line-height:1;display:grid;place-items:center;box-shadow:0 1px 4px rgb(0 0 0 / .18)}
 #zoomReset{font-size:.85rem}
 #app.panning,#app.panning .pedigree{cursor:grabbing;user-select:none}
+.marquee{position:fixed;border:1.5px dashed var(--accent);background:color-mix(in srgb, var(--accent) 15%, transparent);pointer-events:none;z-index:7}
 .pedigree .lines{position:absolute;left:0;top:0;pointer-events:none}
 .fam-line{stroke:var(--line);stroke-width:1.5}
 .fam-line.uncertain{stroke-dasharray:5 3;opacity:.75}

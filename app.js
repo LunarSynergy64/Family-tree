@@ -96,11 +96,16 @@ let showMiddleNames = keyGet("ft-showmiddle")==="1";
    #app's native scrollbars stay correct at any zoom level - no coordinate
    math to redo, unlike the browser's own page zoom which scales everything
    including the header and dock). */
-let zoom = Math.min(1.5, Math.max(0.25, Number(keyGet("ft-zoom")) || 1));
+// Wide, multiplicative range - ancestors and distant descendants can differ
+// in on-screen size by a lot, and manual resizing (layoutScale) widens that
+// further, so the zoom needs enough range (and the same % change at every
+// level, not a fixed step) to bring any of it back into view.
+const ZOOM_MIN = 0.02, ZOOM_MAX = 20, ZOOM_STEP = 1.4;
+let zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Number(keyGet("ft-zoom")) || 1));
 function applyZoom(){ document.documentElement.style.setProperty("--zoom", zoom); }
 applyZoom();
-$("#zoomIn").addEventListener("click", () => { zoom = Math.min(1.5, +(zoom+0.15).toFixed(2)); applyZoom(); keySet("ft-zoom", zoom); render(); });
-$("#zoomOut").addEventListener("click", () => { zoom = Math.max(0.25, +(zoom-0.15).toFixed(2)); applyZoom(); keySet("ft-zoom", zoom); render(); });
+$("#zoomIn").addEventListener("click", () => { zoom = Math.min(ZOOM_MAX, +(zoom*ZOOM_STEP).toFixed(4)); applyZoom(); keySet("ft-zoom", zoom); render(); });
+$("#zoomOut").addEventListener("click", () => { zoom = Math.max(ZOOM_MIN, +(zoom/ZOOM_STEP).toFixed(4)); applyZoom(); keySet("ft-zoom", zoom); render(); });
 $("#zoomReset").addEventListener("click", () => { zoom = 1; applyZoom(); keySet("ft-zoom", zoom); render(); });
 
 function showHome(){
@@ -400,6 +405,7 @@ function ancWidth(id, excludeSpouseId, extraPartnerId, gen){
 // descWidth/placeDescendant). Collapsed still counts as 1 - a folded box
 // takes exactly one slot same as it does everywhere else.
 let natWidthCache = new Map();
+let lastPadX = null, lastPadY = null, pendingPadDelta = null;
 function natDescWidth(id){
   if(natWidthCache.has(id)) return natWidthCache.get(id);
   const p = P(id);
@@ -886,15 +892,22 @@ function renderPedigree(){
   // Generous padding on every side, not just enough to fit the content -
   // gives real room to grab the background and pan around (especially
   // above the topmost row, which used to sit flush against the edge with
-  // nowhere to drag to) and keeps zooming out from feeling cramped. A
-  // further fixed allowance (DRAG_ROOM) covers manual drags in Edit
-  // Layout mode - fixed rather than grown to fit however far someone's
-  // currently dragged, since the pedigree box is centered (margin:auto)
-  // whenever a tree is narrower than the viewport: a box size that reacts
-  // to the drag itself would recenter out from under the very box being
-  // dragged, making it visually lag or race ahead of the mouse.
-  const DRAG_ROOM = 260;
-  const PAD_X = 220 + DRAG_ROOM, PAD_Y = 220 + DRAG_ROOM;
+  // nowhere to drag to) and keeps zooming out from feeling cramped. Manual
+  // drags in Edit Layout mode need room that keeps growing, not a fixed
+  // cap - so it's recomputed from committed layoutDx/layoutDy only (never
+  // from the in-flight drag itself, which only ever touches the live
+  // --dragx/--dragy transform on the node being moved): growing it off the
+  // live drag would recenter the box out from under the very mouse moving
+  // it, racing or lagging the drag. Growing from committed data only means
+  // the resize happens once, on the render right after a drag ends, with
+  // a buffer past the farthest current drag so there's room to keep going.
+  const BASE_ROOM = 400, DRAG_BUFFER = 400;
+  let maxOffX = 0, maxOffY = 0;
+  placed.forEach(n=>{ const o = offsetOf(n.id); maxOffX = Math.max(maxOffX, Math.abs(o.dx)); maxOffY = Math.max(maxOffY, Math.abs(o.dy)); });
+  const PAD_X = 220 + Math.max(BASE_ROOM, maxOffX + DRAG_BUFFER);
+  const PAD_Y = 220 + Math.max(BASE_ROOM, maxOffY + DRAG_BUFFER);
+  pendingPadDelta = lastPadX!=null ? {dx: PAD_X-lastPadX, dy: PAD_Y-lastPadY} : null;
+  lastPadX = PAD_X; lastPadY = PAD_Y;
   const px = x => (x-minX)*SLOT_W + PAD_X;
   // A shrunk row sitting a full, un-shrunk ROW_H away from its parent
   // reads as "freakishly far away" rather than small - the gap between
@@ -971,6 +984,13 @@ function render(){
       lastScrollKey = focusId;
       const me = $(".node.me");
       if(me) me.scrollIntoView({block:"center", inline:"center"});
+    } else if(pendingPadDelta){
+      // Same focus as last render, but the canvas grew (someone's drag
+      // pushed PAD_X/PAD_Y out) - every coordinate shifted by that same
+      // amount, so without this the whole tree would appear to jump even
+      // though nothing the viewer cares about actually moved.
+      app.scrollLeft += pendingPadDelta.dx*zoom;
+      app.scrollTop += pendingPadDelta.dy*zoom;
     }
   }
 }
@@ -1287,6 +1307,47 @@ function onPanEnd(){
   document.removeEventListener("mouseup", onPanEnd);
 }
 
+/* ================= Edit Layout: drag empty space to box-select many =====
+   Viewport (client) coordinates throughout, for both the drawn box and the
+   hit test against each node's own getBoundingClientRect() - sidesteps any
+   zoom/scroll math since both sides of the comparison are in the same
+   space already. */
+let marqueeState = null;
+function startMarquee(e){
+  marqueeState = {x0:e.clientX, y0:e.clientY, el:null, additive: e.shiftKey||e.ctrlKey||e.metaKey};
+  document.addEventListener("mousemove", onMarqueeMove);
+  document.addEventListener("mouseup", onMarqueeEnd);
+}
+function onMarqueeMove(e){
+  if(!marqueeState) return;
+  const dx = e.clientX-marqueeState.x0, dy = e.clientY-marqueeState.y0;
+  if(!marqueeState.el){
+    if(Math.abs(dx)<4 && Math.abs(dy)<4) return;
+    marqueeState.el = document.createElement("div");
+    marqueeState.el.className = "marquee";
+    document.body.appendChild(marqueeState.el);
+  }
+  Object.assign(marqueeState.el.style, {
+    left: Math.min(e.clientX, marqueeState.x0)+"px", top: Math.min(e.clientY, marqueeState.y0)+"px",
+    width: Math.abs(dx)+"px", height: Math.abs(dy)+"px"
+  });
+}
+function onMarqueeEnd(){
+  document.removeEventListener("mousemove", onMarqueeMove);
+  document.removeEventListener("mouseup", onMarqueeEnd);
+  const ms = marqueeState; marqueeState = null;
+  if(!ms || !ms.el) return; // a plain click, with nothing dragged - background click-to-clear runs instead
+  dragged = true;
+  const rect = ms.el.getBoundingClientRect();
+  ms.el.remove();
+  if(!ms.additive) selectedIds.clear();
+  document.querySelectorAll(".node").forEach(el=>{
+    const r = el.getBoundingClientRect();
+    if(r.left<rect.right && r.right>rect.left && r.top<rect.bottom && r.bottom>rect.top) selectedIds.add(el.dataset.go);
+  });
+  render();
+}
+
 /* ================= Edit Layout: drag to move, drag the dot to resize =====
    Only active while editLayout is on. Dragging a node moves it (and every
    other currently-selected node, by the same amount) - the move is applied
@@ -1339,16 +1400,25 @@ function startResize(e, id){
   document.addEventListener("mousemove", onResizeMove);
   document.addEventListener("mouseup", onResizeEnd);
 }
-function resizeRatio(e){
-  const dy = (e.clientY-resizeDrag.startY)/zoom;
+// Takes startY explicitly rather than reading it off the shared resizeDrag -
+// onResizeEnd already has to null that out before its own await, so reading
+// it back through here instead of its own captured copy would crash.
+function resizeRatio(e, startY){
+  const dy = (e.clientY-startY)/zoom;
   return Math.max(0.3, Math.min(2.5, 1 + dy/80));
 }
+// Absolute floor/ceiling on the result, not just on each drag's own ratio -
+// repeated shrink drags each starting from the last saved (already small)
+// scale would otherwise compound toward zero with no way back except
+// zooming in past whatever the page zoom's own max happens to be.
+const SCALE_MIN = 0.2, SCALE_MAX = 4;
+function clampScale(s){ return Math.max(SCALE_MIN, Math.min(SCALE_MAX, s)); }
 function onResizeMove(e){
   if(!resizeDrag) return;
-  const ratio = resizeRatio(e);
+  const ratio = resizeRatio(e, resizeDrag.startY);
   resizeDrag.ids.forEach(id=>{
     const el = $(`.node[data-go="${id}"]`); if(!el) return;
-    el.style.setProperty("--ns", (resizeDrag.startScale.get(id)*ratio).toFixed(3));
+    el.style.setProperty("--ns", clampScale(resizeDrag.startScale.get(id)*ratio).toFixed(3));
   });
 }
 async function onResizeEnd(e){
@@ -1357,10 +1427,10 @@ async function onResizeEnd(e){
   const rd = resizeDrag; resizeDrag = null;
   if(!rd) return;
   dragged = true;
-  const ratio = resizeRatio(e);
+  const ratio = resizeRatio(e, rd.startY);
   for(const id of rd.ids){
     const p = P(id); if(!p) continue;
-    await put({...p, layoutScale: +(rd.startScale.get(id)*ratio).toFixed(3)});
+    await put({...p, layoutScale: +clampScale(rd.startScale.get(id)*ratio).toFixed(3)});
   }
   render();
 }
@@ -1369,7 +1439,7 @@ $("#editLayoutBtn").addEventListener("click", () => {
   selectedIds.clear();
   $("#editLayoutBtn").setAttribute("aria-pressed", String(editLayout));
   app.classList.toggle("editingLayout", editLayout);
-  if(editLayout) toast("Tap boxes to select, drag to move them together. Drag the dot to resize. Tap ✎ again when done.");
+  if(editLayout) toast("Tap boxes to select, or drag empty space to box-select many. Drag a box to move the selection, the dot to resize. Tap ✎ again when done.");
   render();
 });
 
@@ -1380,6 +1450,7 @@ app.addEventListener("mousedown", e => {
   const nodeEl = e.target.closest(".node");
   if(editLayout && nodeEl){ e.preventDefault(); return startLayoutDrag(e, nodeEl.dataset.go); }
   if(e.target.closest(".node") || e.target.closest(".dock")) return;
+  if(editLayout) return startMarquee(e);
   panState = {x:e.clientX, y:e.clientY, left:app.scrollLeft, top:app.scrollTop};
   dragged = false;
   document.addEventListener("mousemove", onPanMove);
@@ -1392,7 +1463,8 @@ app.addEventListener("mousedown", e => {
 app.addEventListener("wheel", e => {
   if(view!=="tree" || e.target.closest(".dock")) return;
   e.preventDefault();
-  zoom = Math.min(1.5, Math.max(0.25, +(zoom + (e.deltaY<0?0.08:-0.08)).toFixed(2)));
+  const factor = e.deltaY<0 ? 1.08 : 1/1.08;
+  zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, +(zoom*factor).toFixed(4)));
   applyZoom(); keySet("ft-zoom", zoom); render();
 }, {passive:false});
 

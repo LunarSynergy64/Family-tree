@@ -375,15 +375,13 @@ function ancWidth(id, excludeSpouseId, extraPartnerId, gen){
   const folks = [p, ...sibs];
   // Every slot at this generation is `step` wide, not a flat 1, so a
   // distant row's own width shrinks right along with its on-screen size.
-  // Everyone here - the pivot included - needs room for their OWN kids
-  // too now that cousins always show, same compression rules as any other
-  // branch, judged purely on that person's own subtree. The pivot's own
-  // kids get placed separately (by placeKidsBelow, not here), but a
-  // sibling's kids land at that very same generation - skipping the
-  // pivot's own reservation would leave nothing stopping a sibling's own
-  // cousin-branch from landing right on top of it.
+  // A sibling (never the pivot - their own kids are the direct bloodline,
+  // placed separately) needs room for their OWN kids too now that cousins
+  // always show - same compression rules as any other branch, judged
+  // purely on that sibling's own subtree.
   const rowWidth = folks.reduce((sum,f)=> {
     const own = step*(1 + partnersOf(f).filter(s=>!(f.id===p.id && s.id===excludeSpouseId)).length + ((f.id===p.id && extraPartnerId)?1:0));
+    if(f.id===p.id) return sum+own;
     return sum + Math.max(own, descWidth(f.id, gen, step, step));
   }, 0);
   const {expand, suppressed} = splitParents(parentsOf(p));
@@ -535,6 +533,7 @@ function placeAncestor(placed, edges, id, excludeSpouseId, xLeft, width, gen, ex
   const step = genScale(gen);
   const rowWidth = folks.reduce((sum,f)=> {
     const own = step*(1 + partnersOf(f.person).filter(s=>!(f.isPivot && s.id===excludeSpouseId)).length + ((f.isPivot && extraPartnerId)?1:0));
+    if(f.isPivot) return sum+own;
     return sum + Math.max(own, descWidth(f.person.id, gen, step, step));
   }, 0);
   // Centering this row purely within the space handed down from the child
@@ -564,12 +563,13 @@ function placeAncestor(placed, edges, id, excludeSpouseId, xLeft, width, gen, ex
     const partners = partnersOf(person).filter(s=>!(f.isPivot && s.id===excludeSpouseId));
     const extra = (f.isPivot && extraPartnerId) ? P(extraPartnerId) : null;
     const unitIds = sortIdsByGender([person.id, ...partners.map(s=>s.id), ...(extra?[extra.id]:[])]);
-    // Anyone here with their own crowded fan of kids below - the pivot
-    // included - needs that much room reserved HERE too, in the row
-    // itself, or the fan spills into whoever's slotted in next to them.
-    // Same width ancWidth already promised this row would have.
+    // A sibling with their own crowded cousin-fan below needs that much
+    // room reserved HERE too, in the row itself, or the fan spills into
+    // whoever's slotted in next to them - same width ancWidth already
+    // promised this row would have (the pivot's own kids aren't placed
+    // in this row at all, so they never need the extra).
     const unitWidth = step*unitIds.length;
-    const descW = descWidth(person.id, gen, step, step);
+    const descW = f.isPivot ? 0 : descWidth(person.id, gen, step, step);
     const neededWidth = Math.max(unitWidth, descW);
     const unitLeft = cursor + (neededWidth-unitWidth)/2;
     const posOf = {};
@@ -839,21 +839,13 @@ function placeKidsBelow(placed, edges, parentId, parentX, parentGen, spouseXMap,
   baseScale = baseScale==null ? 1 : baseScale;
   const kids = childrenOf(parentId).sort(byBorn);
   if(!kids.length) return;
-  // Each kid's own crowding decides how much THAT kid's own children
-  // compress, same as everywhere else this pattern shows up (see
-  // placeDescendant) - using baseScale flat here instead would reserve
-  // (and actually render) every grandkid at full size regardless of how
-  // crowded their branch is, which both overstates what's needed and,
-  // worse, renders wider than whatever a sibling fork next door was
-  // actually promised via descWidth/ancWidth upstream.
-  const kidScales = kids.map(k=>kidGrandkidScale(baseScale, k.id));
-  const widths = kids.map((k,i)=>descWidth(k.id, parentGen+1, baseScale, kidScales[i]));
+  const widths = kids.map(k=>descWidth(k.id, parentGen+1, baseScale, baseScale));
   const totalW = widths.reduce((a,b)=>a+b,0);
   const spouseXs = [...spouseXMap.values()];
   const coupleCenter = spouseXs.length ? [parentX, ...spouseXs].reduce((a,b)=>a+b,0)/(spouseXs.length+1) : parentX;
   let cx = coupleCenter - totalW/2;
   kids.forEach((k,i)=>{
-    const kpos = placeDescendant(placed, edges, k.id, cx, widths[i], parentGen+1, baseScale, kidScales[i]);
+    const kpos = placeDescendant(placed, edges, k.id, cx, widths[i], parentGen+1, baseScale, baseScale);
     const kp = P(k.id);
     const parentPts = [{x:parentX, gen:parentGen, id:parentId}];
     (kp.parents||[]).forEach(pid=>{ if(spouseXMap.has(pid)) parentPts.push({x:spouseXMap.get(pid), gen:parentGen, id:pid}); });

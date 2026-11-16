@@ -342,25 +342,12 @@ function go(id, push=true){
    every other relative (siblings, their spouses) gets their own line too,
    so the "whose parents are whose" is never ambiguous. */
 const SLOT_W = 124, ROW_H = 148;
-// A deep subtree's own width used to propagate all the way back up,
-// forcing everyone near the focal person to spread out just to make room
-// for generations they're barely related to. Each unit now shrinks the
-// further its generation sits from the focal person (gen 0) - both the
-// width it reserves and its own on-screen size (see bubbleHtml's --ns) -
-// so a wide, distant branch takes less room instead of pushing the near
-// generations apart to fit it.
-function genScale(gen){
-  // Ancestors never shrink, no matter how far back - the oldest
-  // generations on record stay full size even zoomed all the way out.
-  if(gen<0) return 1;
-  // Descendants shrink the further down they go, on top of (not instead
-  // of) the crowding-based compression in descWidth/placeDescendant - a
-  // deep branch needs an actual zoom-in to read.
-  if(gen<=2) return 1;
-  if(gen<=4) return 0.75;
-  if(gen<=6) return 0.55;
-  return 0.4;
-}
+// Everyone renders at the same size regardless of generation or how
+// crowded their branch is - nothing shrinks on its own any more. Sizing
+// anyone differently is now purely a manual choice (Edit Layout's
+// resize), never something the tree decides for you just because you
+// clicked a different focus or a branch happens to be wide.
+function genScale(gen){ return 1; }
 const isDivorced = (a, b) => !!(a && b && ((a.divorced||[]).includes(b.id) || (b.divorced||[]).includes(a.id)));
 // A divorced couple sitting right next to each other reads fine with the
 // X drawn over their connecting line - that's only confusing when another
@@ -368,9 +355,7 @@ const isDivorced = (a, b) => !!(a && b && ((a.divorced||[]).includes(b.id) || (b
 // runs straight behind that in-between node. So: X on the line when
 // adjacent, X on the ex-partner's own node otherwise.
 // Takes the actual step distance a true adjacent pair would sit at, not a
-// generation - descendant pairs can be packed tighter than genScale(gen)
-// alone once a crowded branch is compressing itself to fit (see
-// branchScale), so callers pass whatever step they actually placed with.
+// flat assumption, so callers pass whatever step they actually placed with.
 const adjacentX = (ax, bx, expectedStep) => Math.abs(Math.abs(ax-bx)-expectedStep)<0.01;
 // A couple's left/right order is always by gender (male left, female
 // right, unknown gender in between) rather than by who happens to be the
@@ -390,12 +375,9 @@ function ancWidth(id, excludeSpouseId, extraPartnerId, gen){
   const step = genScale(gen);
   const sibs = siblingsOf(p).map(s=>s.p);
   const folks = [p, ...sibs];
-  // Every slot at this generation is `step` wide, not a flat 1, so a
-  // distant row's own width shrinks right along with its on-screen size.
   // A sibling (never the pivot - their own kids are the direct bloodline,
   // placed separately) needs room for their OWN kids too now that cousins
-  // always show - same compression rules as any other branch, judged
-  // purely on that sibling's own subtree.
+  // always show, judged purely on that sibling's own subtree.
   const rowWidth = folks.reduce((sum,f)=> {
     const own = step*(1 + partnersOf(f).filter(s=>!(f.id===p.id && s.id===excludeSpouseId)).length + ((f.id===p.id && extraPartnerId)?1:0));
     if(f.id===p.id) return sum+own;
@@ -415,57 +397,11 @@ function ancWidth(id, excludeSpouseId, extraPartnerId, gen){
     : 0;
   return Math.max(rowWidth, upWidth, step);
 }
-// The true width a subtree would need with nobody shrinking at all (step
-// pinned at 1 throughout, no genScale, no compression) - this is "how
-// crowded is this branch, really", used once per person below to decide
-// how hard that specific branch's grandkids need to compress (see
-// descWidth/placeDescendant). Collapsed still counts as 1 - a folded box
-// takes exactly one slot same as it does everywhere else.
-let natWidthCache = new Map();
 let lastPadX = null, lastPadY = null, pendingPadDelta = null;
-function natDescWidth(id){
-  if(natWidthCache.has(id)) return natWidthCache.get(id);
-  const p = P(id);
-  const rowWidth = 1 + partnersOf(p).length;
-  const kids = childrenOf(id);
-  const downWidth = kids.length ? kids.reduce((sum,k)=>sum+natDescWidth(k.id),0) : 0;
-  const result = Math.max(rowWidth, downWidth, 1);
-  natWidthCache.set(id, result);
-  return result;
-}
-// Siblings are always the same size as each other, full stop - no matter
-// how big any one of their own families turns out to be. What actually
-// compresses to keep a crowded sibling's whole brood from pushing the
-// OTHER siblings further apart is everything from that sibling's own
-// GRANDKIDS down - judged purely on that sibling's own subtree, never
-// pooled with their siblings, so an uncrowded sibling is never punished
-// for a crowded one, and the compression only starts two generations
-// below wherever it was decided, not at the kids themselves. A typical
-// family easily has a few kids who each have a couple of kids of their
-// own - BRANCH_BUDGET is how much natural width that's allowed to take
-// before anything shrinks at all, so an ordinary-sized family is never
-// touched; only a branch that genuinely dwarfs that starts compressing,
-// and even then only down past the budget, not all the way to 1. A floor
-// keeps any single generation from vanishing to nothing in one jump -
-// deep, wide branches still shrink further through repeated cascading,
-// same as before, with the collapse feature as the real escape valve
-// once that gets absurd.
-const BRANCH_BUDGET = 4;
-const MIN_BRANCH_RATIO = 0.15;
-// The scale kidId's OWN children should use, judged purely on kidId's own
-// subtree (never pooled with kidId's siblings - that's what let one
-// crowded sibling drag every other sibling's kids down with it).
-function kidGrandkidScale(nextScale, kidId){
-  const nat = natDescWidth(kidId);
-  const ratio = nat>BRANCH_BUDGET ? Math.max(BRANCH_BUDGET/nat, MIN_BRANCH_RATIO) : 1;
-  return nextScale*ratio;
-}
-// ownScale: the size id itself (and its own siblings) render at - never
-// reduced by id's own crowding. nextScale: the size id's OWN kids render
-// at, inherited from whoever decided ownScale (defaults to the same,
-// i.e. unreduced, until someone's own crowding first calls for less).
-// genScale(gen) layers a depth-based shrink on top of that, same as the
-// ancestor direction always had.
+// ownScale/nextScale no longer differ in practice (nothing reduces either
+// one any more - see genScale), but the parameters stay since every
+// caller already threads them through; collapsing them away is a bigger,
+// riskier change than this needs.
 function descWidth(id, gen, ownScale, nextScale){
   ownScale = ownScale==null ? 1 : ownScale;
   nextScale = nextScale==null ? ownScale : nextScale;
@@ -474,10 +410,7 @@ function descWidth(id, gen, ownScale, nextScale){
   const rowWidth = step*(1 + partnersOf(p).length);
   const kids = childrenOf(id);
   if(!kids.length) return Math.max(rowWidth, step);
-  // Each kid's own crowding (never pooled with its siblings) decides how
-  // much THAT kid's own children compress - a kid with nothing crowding
-  // it stays full size regardless of what its siblings are dealing with.
-  const downWidth = kids.reduce((sum,k)=>sum+descWidth(k.id, gen+1, nextScale, kidGrandkidScale(nextScale, k.id)),0);
+  const downWidth = kids.reduce((sum,k)=>sum+descWidth(k.id, gen+1, nextScale, nextScale),0);
   return Math.max(rowWidth, downWidth, step);
 }
 
@@ -681,12 +614,7 @@ function placeDescendant(placed, edges, id, xLeft, width, gen, ownScale, nextSca
 
   const kids = childrenOf(id).sort(byBorn);
   if(kids.length){
-    // Each kid's own crowding (never pooled with its siblings) decides
-    // how much THAT kid's own children compress - p's own kids all still
-    // render at nextScale, the same size any childless sibling's kids
-    // would, regardless of which of them this is about.
-    const kidScales = kids.map(k=>kidGrandkidScale(nextScale, k.id));
-    const widths = kids.map((k,i)=>descWidth(k.id, gen+1, nextScale, kidScales[i]));
+    const widths = kids.map(k=>descWidth(k.id, gen+1, nextScale, nextScale));
     const totalW = widths.reduce((a,b)=>a+b,0);
     // center the children block on the full allocated width, not on the
     // pivot's own position - when the pivot has a spouse, their own x sits
@@ -694,7 +622,7 @@ function placeDescendant(placed, edges, id, xLeft, width, gen, ownScale, nextSca
     // grandchildren left too, overlapping whatever's allocated next door.
     let cx = (xLeft + width/2) - totalW/2;
     kids.forEach((k,i)=>{
-      const kpos = placeDescendant(placed, edges, k.id, cx, widths[i], gen+1, nextScale, kidScales[i]);
+      const kpos = placeDescendant(placed, edges, k.id, cx, widths[i], gen+1, nextScale, nextScale);
       const kp = P(k.id);
       const parentPts = [{x, gen, id:p.id}];
       (kp.parents||[]).forEach(pid=>{ if(spouseX.has(pid)) parentPts.push({x:spouseX.get(pid), gen, id:pid}); });
@@ -735,9 +663,9 @@ function renderEdges(edges, px, py, pxAdj, pyAdj){
       // anchor, collapsed, or a dead end that never expands) without
       // claiming to show an actual connection to anyone specific. Sized
       // to the node it's attached to, same as the divorce X below, or it
-      // reads as oversized - and could even reach past a heavily
-      // compressed row's own shrunk gap above it. Follows the node's own
-      // manual drag offset (if any), same as everything else here.
+      // reads as oversized against a manually shrunk node. Follows the
+      // node's own manual drag offset (if any), same as everything else
+      // here.
       const x1 = pxAdj(e.id, e.x), yTop = pyAdj(e.id, e.gen), sc = e.scale!=null ? e.scale : 1;
       svg += `<line x1="${x1.toFixed(1)}" y1="${(yTop-30*sc).toFixed(1)}" x2="${x1.toFixed(1)}" y2="${(yTop-58*sc).toFixed(1)}" class="stub-line"/>`;
       return;
@@ -795,13 +723,9 @@ function renderEdges(edges, px, py, pxAdj, pyAdj){
 
 function bubbleHtml(n, x, y){
   const p = P(n.id); if(!p) return "";
-  // The person you actually selected stays full-size regardless of how
-  // far they are from the root - everyone else shrinks the further their
-  // own generation sits from the focal point. Descendants carry their own
-  // precomputed scale (branch crowding folded in, see descWidth) -
-  // ancestors don't have that yet, so they still fall back to the plain
-  // per-generation curve. A manual resize (set while in Edit Layout mode)
-  // always wins over all of that - the user's own explicit choice.
+  // Everyone renders full size by default, however far from the focal
+  // point - a manual resize (set while in Edit Layout mode) is the only
+  // thing that ever makes a box bigger or smaller than that.
   const autoScale = n.id===focusId ? 1 : (n.scale!=null ? n.scale : genScale(n.gen));
   const scale = p.layoutScale!=null ? p.layoutScale : autoScale;
   const scaleStyle = `--ns:${scale.toFixed(3)};`;
@@ -848,10 +772,7 @@ function dockHtml(f){
 // parentId's own x (and spouse(s), via spouseXMap) - shared by the current
 // root's own kids and every ancestor-direction sibling's kids (cousins
 // now always show, the same way an anchor's own descendants used to be
-// the only ones that did). Each kid renders full size as a sibling of
-// their own siblings; it's purely their OWN crowding (see descWidth) that
-// decides how much THEIR kids compress, never pooled with parentId's
-// other kids.
+// the only ones that did).
 function placeKidsBelow(placed, edges, parentId, parentX, parentGen, spouseXMap, baseScale){
   baseScale = baseScale==null ? 1 : baseScale;
   const kids = childrenOf(parentId).sort(byBorn);
@@ -893,9 +814,6 @@ function renderPedigree(){
   // you tap someone new.
   const root = P(focusId);
   if(!root) return `<p class="hint">Nobody to show.</p>`;
-  // Stale from whatever was focused last render - every person's natural
-  // width can shift as soon as focus moves.
-  natWidthCache = new Map();
 
   const placed = [], edges = [];
   const focalPos = placeAncestor(placed, edges, root.id, null, 0, ancWidth(root.id, null, null, 0), 0);
@@ -926,24 +844,15 @@ function renderPedigree(){
   pendingPadDelta = lastPadX!=null ? {dx: PAD_X-lastPadX, dy: PAD_Y-lastPadY} : null;
   lastPadX = PAD_X; lastPadY = PAD_Y;
   const px = x => (x-minX)*SLOT_W + PAD_X;
-  // A shrunk row sitting a full, un-shrunk ROW_H away from its parent
-  // reads as "freakishly far away" rather than small - the gap between
-  // two rows needs to shrink right along with whatever's actually in
-  // them, same as the width already does. Each row's own height is based
-  // on the largest scale present in it (a row that's a mix of sizes still
-  // needs room for its biggest box), floored so no row ever collapses
-  // away entirely.
-  const scaleOf = n => n.id===focusId ? 1 : (n.scale!=null ? n.scale : genScale(n.gen));
-  const rowMaxScale = new Map();
-  placed.forEach(n=>{ const s=scaleOf(n); rowMaxScale.set(n.gen, Math.max(rowMaxScale.get(n.gen)||0, s)); });
-  const MIN_ROW_SCALE = 0.35;
+  // Every row is the same flat ROW_H apart now that nothing shrinks on
+  // its own - a manual resize doesn't change row height either, same as
+  // it doesn't change anyone else's width (see bubbleHtml).
   const gensSorted = [...new Set(gens)].sort((a,b)=>a-b);
   const rowY = new Map();
   rowY.set(gensSorted[0], 0);
   for(let i=1;i<gensSorted.length;i++){
     const g0=gensSorted[i-1], g1=gensSorted[i];
-    const s0 = Math.max(rowMaxScale.get(g0)||1, MIN_ROW_SCALE), s1 = Math.max(rowMaxScale.get(g1)||1, MIN_ROW_SCALE);
-    rowY.set(g1, rowY.get(g0) + ROW_H*((s0+s1)/2)*(g1-g0));
+    rowY.set(g1, rowY.get(g0) + ROW_H*(g1-g0));
   }
   const py = g => (rowY.get(g)||0) + PAD_Y;
   const pxAdj = (id, x) => px(x) + offsetOf(id).dx;

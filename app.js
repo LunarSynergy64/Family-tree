@@ -70,7 +70,15 @@ function forgetTree(key){ keySet("ft-trees", JSON.stringify(savedTrees().filter(
 /* ================= screens ================= */
 let tree = null;            // {key, name, defaultFocus}
 let unsub = null;
-let people = new Map(), focusId = null, trail = [], view = "tree", loaded = false, query = "", offlineNote = "";
+// rootId: who the whole grid is positioned relative to - only changes
+// when you tap an in-law (someone attached by marriage, not blood: see
+// the "dim" nodes in bubbleHtml), since their own ancestry isn't drawn
+// yet and needs a fresh grid to show it. focusId: who's actually
+// selected right now (shown in the dock, highlighted, edited) - this
+// changes on every tap, blood relative or not, since anyone blood-
+// related to rootId is already on screen and just needs picking, not a
+// whole new grid.
+let people = new Map(), rootId = null, focusId = null, trail = [], view = "tree", loaded = false, query = "", offlineNote = "";
 let sheetMode = null;
 let editCoParents = [], editFormalSpouses = [];
 // Manual layout editing: a toggleable mode where tapping a box selects it
@@ -127,7 +135,7 @@ $("#zoomReset").addEventListener("click", () => zoomTo(1));
 
 function showHome(){
   if(unsub){ unsub(); unsub = null; }
-  tree = null; people = new Map(); focusId = null; trail = [];
+  tree = null; people = new Map(); rootId = null; focusId = null; trail = [];
   history.replaceState(null, "", location.pathname);
   $("#treeScreen").hidden = true; $("#home").hidden = false;
   const list = savedTrees();
@@ -147,7 +155,7 @@ async function openTree(key, nameHint){
   history.replaceState(null, "", location.pathname + "#t=" + key);
   $("#home").hidden = true; $("#treeScreen").hidden = false;
   $("#treeTitle").textContent = name; document.title = name;
-  loaded = false; offlineNote = ""; view = "tree"; trail = []; focusId = null;
+  loaded = false; offlineNote = ""; view = "tree"; trail = []; rootId = null; focusId = null;
   render();
   const timer = setTimeout(()=>{ if(!loaded){ offlineNote="Still loading. If this stays, check your connection."; render(); } }, 10000);
   unsub = onSnapshot(collection(fs, "trees", key, "people"), qs => {
@@ -307,31 +315,39 @@ async function setDefaultFocus(id){
 }
 
 /* ================= pedigree grid rendering =================
-   One person is the focal point. Going UP from them is a full binary
-   ancestor fan (both parents, each generation also showing that
-   ancestor's own siblings). Going DOWN from them is every descendant,
-   generation by generation. A spouse married in at any level, and a
-   sibling's own line, are shown as a single dim "more" bubble — their
-   own parents/children aren't expanded unless you tap them, which
-   re-centres the whole grid on them. */
+   One person is the root the whole grid is positioned relative to.
+   Going UP from them is a full binary ancestor fan (both parents, each
+   generation also showing that ancestor's own siblings). Going DOWN
+   from them is every descendant, generation by generation - so every
+   blood relative of the root (ancestors, descendants, siblings,
+   cousins, aunts/uncles, nieces/nephews) is already on screen at once,
+   and tapping one of them just selects them (see select()) rather than
+   moving anything. A spouse married in at any level - an in-law, shown
+   dim - is the one case that isn't already drawn past their own tie
+   line, so tapping one of those re-roots the grid on them instead (see
+   go()), bringing their own ancestry and descendants into view. */
 function pickFocus(){
-  if(focusId && P(focusId)) return;
-  if(tree.defaultFocus && P(tree.defaultFocus)){ setFocus(tree.defaultFocus); return; }
+  if(rootId && P(rootId)) return;
+  if(tree.defaultFocus && P(tree.defaultFocus)){ setRoot(tree.defaultFocus); return; }
   const all = [...people.values()].filter(p=>!p.placeholder).sort(byName);
-  if(all.length) setFocus(all[0].id);
+  if(all.length) setRoot(all[0].id);
 }
-/* Moves focus to `id` - the whole grid always re-roots on whoever's
-   focused (see renderPedigree), so clicking any ancestor or descendant
-   simply re-centers the view on them, with their own full lineage above
-   and below. */
-function setFocus(id){
+// Re-roots the grid on `id` and selects them - the only two things that
+// ever move the frame (see go()).
+function setRoot(id){
   if(!P(id)) return;
-  focusId = id;
+  rootId = id; focusId = id;
+}
+// Selects `id` for the dock/highlight/editing without touching the
+// grid's root - safe for anyone already on screen as a blood relative.
+function select(id){
+  if(!P(id)) return;
+  focusId = id; render();
 }
 function go(id, push=true){
   if(!P(id)) return;
-  if(push && focusId && focusId!==id) trail.push(focusId);
-  setFocus(id); view="tree"; render();
+  if(push && rootId && rootId!==id) trail.push(rootId);
+  setRoot(id); view="tree"; render();
 }
 
 /* Generations are flat rows (a fixed height apart, never based on birth
@@ -809,10 +825,10 @@ function renderPedigree(){
     return `<div class="empty"><h2>Start your tree</h2><p>Add yourself or the oldest relative you know. Then add their parents, partners and children from their card.</p><button class="primary" data-add="root">Add the first person</button></div>`;
   }
   pickFocus();
-  // The grid always roots on whoever's currently focused - their entire
-  // recorded lineage both up and down, re-centering completely whenever
-  // you tap someone new.
-  const root = P(focusId);
+  // The grid roots on rootId - their entire recorded lineage both up and
+  // down - which only moves when you tap an in-law (see go()). A blood
+  // relative tap just moves the selection (focusId), already on screen.
+  const root = P(rootId);
   if(!root) return `<p class="hint">Nobody to show.</p>`;
 
   const placed = [], edges = [];
@@ -844,19 +860,55 @@ function renderPedigree(){
   pendingPadDelta = lastPadX!=null ? {dx: PAD_X-lastPadX, dy: PAD_Y-lastPadY} : null;
   lastPadX = PAD_X; lastPadY = PAD_Y;
   const px = x => (x-minX)*SLOT_W + PAD_X;
-  // Every row is the same flat ROW_H apart now that nothing shrinks on
-  // its own - a manual resize doesn't change row height either, same as
-  // it doesn't change anyone else's width (see bubbleHtml).
+  // Rows are a flat ROW_H apart by default - nothing shrinks or grows on
+  // its own any more - except when a manual resize (layoutScale) makes a
+  // box in that row taller than that, which needs the row gap itself to
+  // grow or the box would reach up into the row above regardless of how
+  // much horizontal room it has. A box only ever gets bigger because the
+  // person using Edit Layout chose that, so the row growing to fit is a
+  // direct consequence of their own choice, not an automatic shrink.
+  const rowMaxScale = new Map();
+  placed.forEach(n=>{ const p=P(n.id); const s=(p&&p.layoutScale!=null)?p.layoutScale:1; rowMaxScale.set(n.gen, Math.max(rowMaxScale.get(n.gen)||1, s)); });
   const gensSorted = [...new Set(gens)].sort((a,b)=>a-b);
   const rowY = new Map();
   rowY.set(gensSorted[0], 0);
   for(let i=1;i<gensSorted.length;i++){
     const g0=gensSorted[i-1], g1=gensSorted[i];
-    rowY.set(g1, rowY.get(g0) + ROW_H*(g1-g0));
+    const s0 = rowMaxScale.get(g0)||1, s1 = rowMaxScale.get(g1)||1;
+    rowY.set(g1, rowY.get(g0) + ROW_H*((s0+s1)/2)*(g1-g0));
   }
   const py = g => (rowY.get(g)||0) + PAD_Y;
-  const pxAdj = (id, x) => px(x) + offsetOf(id).dx;
+  const pxRaw = (id, x) => px(x) + offsetOf(id).dx;
   const pyAdj = (id, gen) => py(gen) + offsetOf(id).dy;
+  // Hard guarantee against two boxes ever rendering on top of each
+  // other, regardless of any upstream width-reservation edge case or a
+  // manual resize that makes one box wider than its own reserved slot -
+  // after everyone's "natural" position is set, nudge rightward (never
+  // together) anyone whose actual rendered box, manual scale included,
+  // would still overlap their nearest left neighbor in the same row.
+  // Only ever pushes things further apart, so it's a true no-op whenever
+  // positions are already fine, which is the overwhelming majority of
+  // the time.
+  const MIN_GAP = 8;
+  const halfWidthOf = id => { const p = P(id); return 54*((p && p.layoutScale!=null) ? p.layoutScale : 1); };
+  const nodeNudgeX = new Map();
+  const rowsByGen = new Map();
+  placed.forEach(n=>{ if(!rowsByGen.has(n.gen)) rowsByGen.set(n.gen, []); rowsByGen.get(n.gen).push(n); });
+  rowsByGen.forEach(row=>{
+    const sorted = [...row].sort((a,b)=> pxRaw(a.id,a.x) - pxRaw(b.id,b.x));
+    let prevRight = null;
+    sorted.forEach(n=>{
+      let x = pxRaw(n.id, n.x);
+      const half = halfWidthOf(n.id);
+      if(prevRight!=null && x-half < prevRight+MIN_GAP){
+        const nudge = (prevRight+MIN_GAP) - (x-half);
+        nodeNudgeX.set(n.id, nudge);
+        x += nudge;
+      }
+      prevRight = x+half;
+    });
+  });
+  const pxAdj = (id, x) => pxRaw(id, x) + (nodeNudgeX.get(id)||0);
   const width = (maxX-minX)*SLOT_W + PAD_X*2;
   const height = (rowY.get(maxGen)||0) + PAD_Y*2 + 170;
 
@@ -1043,7 +1095,7 @@ $("#resolveA").addEventListener("click", async () => {
   if(ok){
     $("#resolveParents").hidden = true;
     toast(`Confirmed - ${displayName(p)||"their"}'s parents.`);
-    setFocus(focusId); render();
+    render();
   }
 });
 $("#resolveB").addEventListener("click", async () => {
@@ -1059,7 +1111,7 @@ $("#resolveB").addEventListener("click", async () => {
   if(ok1 && ok2){
     $("#resolveParents").hidden = true;
     toast(`Confirmed - ${displayName(partner)||"their partner"}'s parents.`);
-    setFocus(focusId); render();
+    render();
   }
 });
 
@@ -1117,7 +1169,7 @@ $("#sheetForm").addEventListener("submit", async e => {
       if(rel==="root"){
         await put(person);
         await setDefaultFocus(person.id);
-        setFocus(person.id);
+        setRoot(person.id);
       }
       else if(rel==="parent"){
         const other = parentsOf(f)[0];
@@ -1172,7 +1224,7 @@ $("#delYes").addEventListener("click", async () => {
   }
   await drop(id);
   trail = trail.filter(x=>x!==id);
-  if(next) setFocus(next.id); else { focusId = null; }
+  if(next) setRoot(next.id); else { rootId = null; focusId = null; }
   render(); toast("Removed.");
 });
 
@@ -1182,7 +1234,7 @@ $("#menuBtn").addEventListener("click", () => {
   $("#inviteName").textContent = `Or they can tap "Join a tree" and type the name "${tree.name}" with the password.`;
   $("#forgetBtn").textContent = "Remove this tree from this device";
   $("#forgetBtn").dataset.armed = "";
-  const f = P(focusId);
+  const f = P(rootId);
   $("#setDefaultBtn").hidden = !f || f.placeholder || tree.defaultFocus===f.id;
   $("#setDefaultBtn").textContent = f ? `Set ${displayName(f)||"this person"} as everyone's starting point` : "Set as everyone's starting point";
   $("#colorGenderToggle").checked = app.classList.contains("color-gender");
@@ -1199,9 +1251,9 @@ $("#colorGenderToggle").addEventListener("change", e => {
   keySet("ft-colorgender", e.target.checked ? "1" : "0");
 });
 $("#setDefaultBtn").addEventListener("click", async () => {
-  const f = P(focusId); if(!f) return;
+  const f = P(rootId); if(!f) return;
   const ok = await setDefaultFocus(f.id);
-  if(ok){ setFocus(f.id); render(); toast(`${displayName(f)||"This person"} is now everyone's starting point.`); }
+  if(ok){ render(); toast(`${displayName(f)||"This person"} is now everyone's starting point.`); }
   $("#menu").hidden = true;
 });
 $("#copyBtn").addEventListener("click", async () => {
@@ -1419,6 +1471,12 @@ document.addEventListener("click", e => {
     const id = g.dataset.go, p = P(id);
     if(p && p.placeholder) return openSheet({edit:id});
     if(id === focusId) return openSheet({edit:id});
+    // A blood relative of rootId is already drawn in the current grid
+    // (any tree-view .node that isn't a dim in-law) - just select them
+    // in place. Anything else - an in-law node, or a card tapped from
+    // the flat Everyone list, which isn't part of the current grid at
+    // all - needs the grid itself to move (go()).
+    if(g.classList.contains("node") && !g.classList.contains("dim")) return select(id);
     return go(id);
   }
   const a = e.target.closest("[data-add]"); if(a) return openSheet({rel:a.dataset.add});

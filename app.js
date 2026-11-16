@@ -104,9 +104,26 @@ const ZOOM_MIN = 0.02, ZOOM_MAX = 20, ZOOM_STEP = 1.4;
 let zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Number(keyGet("ft-zoom")) || 1));
 function applyZoom(){ document.documentElement.style.setProperty("--zoom", zoom); }
 applyZoom();
-$("#zoomIn").addEventListener("click", () => { zoom = Math.min(ZOOM_MAX, +(zoom*ZOOM_STEP).toFixed(4)); applyZoom(); keySet("ft-zoom", zoom); render(); });
-$("#zoomOut").addEventListener("click", () => { zoom = Math.max(ZOOM_MIN, +(zoom/ZOOM_STEP).toFixed(4)); applyZoom(); keySet("ft-zoom", zoom); render(); });
-$("#zoomReset").addEventListener("click", () => { zoom = 1; applyZoom(); keySet("ft-zoom", zoom); render(); });
+// The "zoom" CSS property always scales from its own top-left corner, so
+// changing it with no further adjustment visibly drags everything toward
+// (or away from) that corner. Keep whatever's under the given screen
+// point (the cursor for the wheel, the viewport's own center for the
+// buttons) fixed in place instead, same idea as a map's own zoom control.
+function zoomTo(newZoom, anchorClientX, anchorClientY){
+  newZoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, newZoom));
+  if(newZoom===zoom) return;
+  const rect = app.getBoundingClientRect();
+  const ax = anchorClientX!=null ? anchorClientX-rect.left : rect.width/2;
+  const ay = anchorClientY!=null ? anchorClientY-rect.top : rect.height/2;
+  const worldX = (app.scrollLeft+ax)/zoom, worldY = (app.scrollTop+ay)/zoom;
+  zoom = newZoom;
+  applyZoom(); keySet("ft-zoom", zoom); render();
+  app.scrollLeft = worldX*zoom - ax;
+  app.scrollTop = worldY*zoom - ay;
+}
+$("#zoomIn").addEventListener("click", () => zoomTo(+(zoom*ZOOM_STEP).toFixed(4)));
+$("#zoomOut").addEventListener("click", () => zoomTo(+(zoom/ZOOM_STEP).toFixed(4)));
+$("#zoomReset").addEventListener("click", () => zoomTo(1));
 
 function showHome(){
   if(unsub){ unsub(); unsub = null; }
@@ -1464,8 +1481,7 @@ app.addEventListener("wheel", e => {
   if(view!=="tree" || e.target.closest(".dock")) return;
   e.preventDefault();
   const factor = e.deltaY<0 ? 1.08 : 1/1.08;
-  zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, +(zoom*factor).toFixed(4)));
-  applyZoom(); keySet("ft-zoom", zoom); render();
+  zoomTo(+(zoom*factor).toFixed(4), e.clientX, e.clientY);
 }, {passive:false});
 
 /* ================= events ================= */

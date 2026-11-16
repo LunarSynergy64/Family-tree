@@ -68,7 +68,24 @@ main{max-width:1400px;margin:0 auto;padding:18px var(--gutter-r) calc(48px + env
 
 /* ---- pedigree grid: exact-coordinate generation rows ---- */
 #app{overflow:auto;flex:1;min-height:0;-webkit-overflow-scrolling:touch}
-.pedigree{position:relative;padding-bottom:170px;margin:0 auto;cursor:grab;zoom:var(--zoom,1)}
+/* The generic main{max-width:1400px;margin:0 auto} above is fine for the
+   flat Everyone list, but #app IS that <main> - on the pedigree canvas it
+   silently capped the viewport itself at 1400px and centered it, so on
+   any narrower window #app ends up wider than what's on screen and
+   overflows off both edges equally, clipped by body's overflow:hidden.
+   Every "where's the middle of the screen" calculation (zoom anchoring,
+   re-centering on a click) was measuring the middle of that oversized,
+   partly invisible box instead of the middle of what's actually visible.
+   The canvas needs the full real viewport, uncapped. */
+#app:has(.pedigree){max-width:none;margin:0}
+/* Left-aligned, not margin:auto centered - centering only kicks in while
+   the canvas is narrower than the viewport, and that auto margin shifts
+   by a different, non-proportional amount at every zoom level, which
+   broke the assumption zoomTo relies on (that a world point's screen
+   position scales by exactly the zoom ratio). Whoever's focused already
+   gets scrolled into view on their own (see render()), so this was only
+   ever cosmetic for a small tree's otherwise-empty margin. */
+.pedigree{position:relative;padding-bottom:170px;cursor:grab;zoom:var(--zoom,1)}
 .zoomCtl{position:fixed;right:var(--gutter-r);bottom:calc(150px + env(safe-area-inset-bottom,0px));z-index:6;display:flex;flex-direction:column;gap:6px}
 .zoomCtl button{width:36px;height:36px;border-radius:999px;border:1px solid var(--line);background:var(--card);font-size:1.1rem;line-height:1;display:grid;place-items:center;box-shadow:0 1px 4px rgb(0 0 0 / .18)}
 #zoomReset{font-size:.85rem}

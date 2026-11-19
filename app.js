@@ -223,6 +223,13 @@ $("#createForm").addEventListener("submit", async e => {
 const parentsOf = p => (p.parents||[]).map(P).filter(Boolean);
 const partnersOf = p => (p.spouses||[]).map(P).filter(Boolean);
 const childrenOf = id => [...people.values()].filter(c => (c.parents||[]).includes(id));
+// What the layout actually draws below someone - the true list, unless
+// they're collapsed, in which case nothing (their own box stands in for
+// the whole branch). Everywhere else - the "X children" count, deleting
+// someone, linking partners - still needs the true list regardless of
+// whether it's currently hidden, so this is only for placement/width
+// math, never a replacement for childrenOf itself.
+const visibleChildren = id => { const p = P(id); return (p && p.collapsed) ? [] : childrenOf(id); };
 function siblingsOf(p){
   const mine = p.parents||[]; if(!mine.length) return [];
   return [...people.values()].filter(s => s.id!==p.id && (s.parents||[]).some(x=>mine.includes(x)))
@@ -266,6 +273,7 @@ async function put(p){
   };
   if(p.placeholder && !data.name) data.placeholder = true;
   if(p.parentsUncertain) data.parentsUncertain = true;
+  if(p.collapsed) data.collapsed = true;
   if(p.layoutDx) data.layoutDx = p.layoutDx;
   if(p.layoutDy) data.layoutDy = p.layoutDy;
   if(p.layoutScale) data.layoutScale = p.layoutScale;
@@ -357,7 +365,7 @@ function go(id, push=true){
    person, not just at the middle of whatever row they're sitting in - and
    every other relative (siblings, their spouses) gets their own line too,
    so the "whose parents are whose" is never ambiguous. */
-const SLOT_W = 124, ROW_H = 148;
+const SLOT_W = 160, ROW_H = 180;
 // Everyone renders at the same size regardless of generation or how
 // crowded their branch is - nothing shrinks on its own any more. Sizing
 // anyone differently is now purely a manual choice (Edit Layout's
@@ -424,7 +432,7 @@ function descWidth(id, gen, ownScale, nextScale){
   const p = P(id);
   const step = ownScale*genScale(gen);
   const rowWidth = step*(1 + partnersOf(p).length);
-  const kids = childrenOf(id);
+  const kids = visibleChildren(id);
   if(!kids.length) return Math.max(rowWidth, step);
   const downWidth = kids.reduce((sum,k)=>sum+descWidth(k.id, gen+1, nextScale, nextScale),0);
   return Math.max(rowWidth, downWidth, step);
@@ -628,7 +636,7 @@ function placeDescendant(placed, edges, id, xLeft, width, gen, ownScale, nextSca
     if(!sp.placeholder && (sp.parents||[]).length) edges.push({stub:true, x:sx, gen, id:sp.id, scale:step});
   });
 
-  const kids = childrenOf(id).sort(byBorn);
+  const kids = visibleChildren(id).sort(byBorn);
   if(kids.length){
     const widths = kids.map(k=>descWidth(k.id, gen+1, nextScale, nextScale));
     const totalW = widths.reduce((a,b)=>a+b,0);
@@ -763,8 +771,18 @@ function bubbleHtml(n, x, y){
   const uncertainBadge = (p.parentsUncertain && uncertainPartner)
     ? ` <span class="uncertainBadge" data-resolve="${esc(p.id)}" title="${esc(`Not sure if these are ${displayName(p)||"their"}'s parents or ${displayName(uncertainPartner)||"their partner"}'s - tap to say for sure`)}">?</span>`
     : "";
-  return `<button class="node${n.dim?" dim":""}${n.id===focusId?" me":""}${more?" more":""}${genderCls}${selCls}" style="left:${x}px;top:${y}px;${scaleStyle}" data-go="${esc(n.id)}" data-scale="${scale.toFixed(3)}">
-    <span class="nm">${esc(displayName(p)||"Unnamed")}${n.divorced?` <span class="divorcedBadge" title="Divorced">✕</span>`:""}${uncertainBadge}</span>
+  // Collapsing hides a crowded branch behind the one box at its top,
+  // movable as a single unit in Edit Layout - their kids are never
+  // placed at all while collapsed (see visibleChildren), not just
+  // visually hidden, so nothing below has to be squeezed in anywhere.
+  // Never on a dim in-law: their own line isn't expanded here regardless
+  // (see placeKidsBelow/placeAncestor), so there'd be nothing to toggle.
+  const kidCount = childrenOf(p.id).length;
+  const collapseBadge = (!n.dim && kidCount>0)
+    ? ` <span class="collapseBadge" data-collapse="${esc(p.id)}" title="${p.collapsed ? `Show ${kidCount===1?"their child":kidCount+" children"} again` : `Hide ${kidCount===1?"their child":kidCount+" children"} for now`}">${p.collapsed ? "+"+kidCount : "−"}</span>`
+    : "";
+  return `<button class="node${n.dim?" dim":""}${n.id===focusId?" me":""}${more?" more":""}${p.collapsed?" collapsed":""}${genderCls}${selCls}" style="left:${x}px;top:${y}px;${scaleStyle}" data-go="${esc(n.id)}" data-scale="${scale.toFixed(3)}">
+    <span class="nm">${esc(displayName(p)||"Unnamed")}${n.divorced?` <span class="divorcedBadge" title="Divorced">✕</span>`:""}${uncertainBadge}${collapseBadge}</span>
     ${p.maidenName?`<span class="maiden">(${esc(p.maidenName)})</span>`:""}
     <span class="yrs${birthKnown(p)?"":" unk"}">${esc(birthLabel(p))}</span>
     ${n.half?`<span class="chip">half</span>`:""}
@@ -791,7 +809,7 @@ function dockHtml(f){
 // the only ones that did).
 function placeKidsBelow(placed, edges, parentId, parentX, parentGen, spouseXMap, baseScale){
   baseScale = baseScale==null ? 1 : baseScale;
-  const kids = childrenOf(parentId).sort(byBorn);
+  const kids = visibleChildren(parentId).sort(byBorn);
   if(!kids.length) return;
   const widths = kids.map(k=>descWidth(k.id, parentGen+1, baseScale, baseScale));
   const totalW = widths.reduce((a,b)=>a+b,0);
@@ -889,13 +907,32 @@ function renderPedigree(){
   // Only ever pushes things further apart, so it's a true no-op whenever
   // positions are already fine, which is the overwhelming majority of
   // the time.
-  const MIN_GAP = 8;
+  const MIN_GAP = 16;
   const halfWidthOf = id => { const p = P(id); return 54*((p && p.layoutScale!=null) ? p.layoutScale : 1); };
+  const estHalfHeight = id => { const p = P(id); return 50*((p && p.layoutScale!=null) ? p.layoutScale : 1); };
   const nodeNudgeX = new Map();
-  const rowsByGen = new Map();
-  placed.forEach(n=>{ if(!rowsByGen.has(n.gen)) rowsByGen.set(n.gen, []); rowsByGen.get(n.gen).push(n); });
-  rowsByGen.forEach(row=>{
-    const sorted = [...row].sort((a,b)=> pxRaw(a.id,a.x) - pxRaw(b.id,b.x));
+  // Banded by actual rendered Y, not generation number - a manual
+  // vertical drag can put someone visually in a different row than their
+  // own generation, and this still needs to check them against whoever
+  // they're actually near, not just their generation-mates. In the
+  // untouched default layout this lands exactly on generation rows
+  // anyway, since everyone in the same generation renders at the same Y.
+  // The band-break threshold is the tallest box actually present (floored
+  // at a sane minimum), not a flat guess - a manual resize can make a box
+  // tall enough that a flat, smaller threshold would let it slip into the
+  // next band uncompared.
+  const bandGap = Math.max(100, ...placed.map(n=>estHalfHeight(n.id)*2 + MIN_GAP));
+  const byY = [...placed].sort((a,b)=> pyAdj(a.id,a.gen) - pyAdj(b.id,b.gen));
+  const bands = [];
+  let curBand = [], curY = null;
+  byY.forEach(n=>{
+    const y = pyAdj(n.id, n.gen);
+    if(curY!=null && Math.abs(y-curY) > bandGap){ bands.push(curBand); curBand = []; }
+    curBand.push(n); curY = y;
+  });
+  if(curBand.length) bands.push(curBand);
+  bands.forEach(band=>{
+    const sorted = [...band].sort((a,b)=> pxRaw(a.id,a.x) - pxRaw(b.id,b.x));
     let prevRight = null;
     sorted.forEach(n=>{
       let x = pxRaw(n.id, n.x);
@@ -1079,6 +1116,16 @@ function openSheet(mode){
   setTimeout(()=>$("#f-first").focus(), 50);
 }
 function closeSheet(){ $("#sheet").hidden = true; sheetMode = null; }
+
+function toggleCollapse(id){
+  const p = P(id); if(!p) return;
+  // Not awaited - put()'s own local update lands synchronously before
+  // this call returns (it only awaits the network write after that), so
+  // rendering right away gives instant feedback instead of waiting on a
+  // round trip for what's otherwise a purely visual toggle.
+  put({...p, collapsed: !p.collapsed});
+  render();
+}
 
 let resolvePersonId = null;
 function openResolveSheet(id){
@@ -1425,6 +1472,7 @@ app.addEventListener("mousedown", e => {
   if(view!=="tree" || e.button!==0) return;
   const handle = e.target.closest("[data-resize]");
   if(editLayout && handle) return startResize(e, handle.dataset.resize);
+  if(e.target.closest("[data-collapse]")) return; // let the click handler toggle it, not start a drag
   const nodeEl = e.target.closest(".node");
   if(editLayout && nodeEl){ e.preventDefault(); return startLayoutDrag(e, nodeEl.dataset.go); }
   if(e.target.closest(".node") || e.target.closest(".dock")) return;
@@ -1448,6 +1496,11 @@ app.addEventListener("wheel", e => {
 /* ================= events ================= */
 document.addEventListener("click", e => {
   if(dragged){ dragged = false; e.stopPropagation(); e.preventDefault(); return; }
+  // Checked before the editLayout branch below (which otherwise treats
+  // any tap inside a .node as a select/deselect) so collapsing still
+  // works while arranging boxes by hand, not just in normal browsing.
+  const cb = e.target.closest("[data-collapse]");
+  if(cb) return toggleCollapse(cb.dataset.collapse);
   if(editLayout){
     if(e.target.closest("[data-resize]")) return;
     const node = e.target.closest(".node");

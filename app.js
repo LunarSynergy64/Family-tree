@@ -910,40 +910,31 @@ function renderPedigree(){
   const MIN_GAP = 16;
   const halfWidthOf = id => { const p = P(id); return 54*((p && p.layoutScale!=null) ? p.layoutScale : 1); };
   const estHalfHeight = id => { const p = P(id); return 50*((p && p.layoutScale!=null) ? p.layoutScale : 1); };
+  // Provably correct, not a heuristic: process every box left to right by
+  // raw X, and for each one, look at every box already placed (to its
+  // left) whose actual Y-range genuinely overlaps its own (real
+  // half-heights, not a generation number or a guessed band) - push right
+  // only as far as the worst of those demands. Since later boxes are only
+  // ever compared against already-finalized earlier ones, nothing placed
+  // this way can end up too close to anything already placed, by
+  // induction - no threshold to tune, no pass count to guess at, and a
+  // manual drag landing anywhere near another row is caught exactly the
+  // same as a same-generation neighbor.
   const nodeNudgeX = new Map();
-  // Banded by actual rendered Y, not generation number - a manual
-  // vertical drag can put someone visually in a different row than their
-  // own generation, and this still needs to check them against whoever
-  // they're actually near, not just their generation-mates. In the
-  // untouched default layout this lands exactly on generation rows
-  // anyway, since everyone in the same generation renders at the same Y.
-  // The band-break threshold is the tallest box actually present (floored
-  // at a sane minimum), not a flat guess - a manual resize can make a box
-  // tall enough that a flat, smaller threshold would let it slip into the
-  // next band uncompared.
-  const bandGap = Math.max(100, ...placed.map(n=>estHalfHeight(n.id)*2 + MIN_GAP));
-  const byY = [...placed].sort((a,b)=> pyAdj(a.id,a.gen) - pyAdj(b.id,b.gen));
-  const bands = [];
-  let curBand = [], curY = null;
-  byY.forEach(n=>{
-    const y = pyAdj(n.id, n.gen);
-    if(curY!=null && Math.abs(y-curY) > bandGap){ bands.push(curBand); curBand = []; }
-    curBand.push(n); curY = y;
-  });
-  if(curBand.length) bands.push(curBand);
-  bands.forEach(band=>{
-    const sorted = [...band].sort((a,b)=> pxRaw(a.id,a.x) - pxRaw(b.id,b.x));
-    let prevRight = null;
-    sorted.forEach(n=>{
-      let x = pxRaw(n.id, n.x);
-      const half = halfWidthOf(n.id);
-      if(prevRight!=null && x-half < prevRight+MIN_GAP){
-        const nudge = (prevRight+MIN_GAP) - (x-half);
-        nodeNudgeX.set(n.id, nudge);
-        x += nudge;
+  const sortedByX = [...placed].sort((a,b)=> pxRaw(a.id,a.x) - pxRaw(b.id,b.x));
+  const placedSoFar = [];
+  sortedByX.forEach(n=>{
+    const half = halfWidthOf(n.id), halfH = estHalfHeight(n.id), y = pyAdj(n.id, n.gen);
+    let x = pxRaw(n.id, n.x);
+    placedSoFar.forEach(o=>{
+      if(Math.abs(y-o.y) < halfH+o.halfH){
+        const minX = o.x + o.half + MIN_GAP + half;
+        if(x < minX) x = minX;
       }
-      prevRight = x+half;
     });
+    const nudge = x - pxRaw(n.id, n.x);
+    if(nudge>0.01) nodeNudgeX.set(n.id, nudge);
+    placedSoFar.push({x, half, y, halfH});
   });
   const pxAdj = (id, x) => pxRaw(id, x) + (nodeNudgeX.get(id)||0);
   const width = (maxX-minX)*SLOT_W + PAD_X*2;
@@ -1119,12 +1110,27 @@ function closeSheet(){ $("#sheet").hidden = true; sheetMode = null; }
 
 function toggleCollapse(id){
   const p = P(id); if(!p) return;
+  // Collapsing/expanding can change PAD_X/Y (a whole branch's width
+  // reappearing or vanishing) and the render()-level pendingPadDelta
+  // compensation doesn't always land pixel-perfect on its own - so
+  // measure the actual toggled box's own screen position before and
+  // after, and correct the scroll by whatever's left over, same idea as
+  // zoomTo's anchor-preservation. Anchoring on the box you just tapped
+  // (not the current selection) keeps your actual point of reference on
+  // screen even if it isn't the selected person.
+  const before = $(`.node[data-go="${CSS.escape(id)}"]`)?.getBoundingClientRect();
   // Not awaited - put()'s own local update lands synchronously before
   // this call returns (it only awaits the network write after that), so
   // rendering right away gives instant feedback instead of waiting on a
   // round trip for what's otherwise a purely visual toggle.
   put({...p, collapsed: !p.collapsed});
   render();
+  const afterEl = $(`.node[data-go="${CSS.escape(id)}"]`);
+  if(before && afterEl){
+    const after = afterEl.getBoundingClientRect();
+    app.scrollLeft += after.left-before.left;
+    app.scrollTop += after.top-before.top;
+  }
 }
 
 let resolvePersonId = null;

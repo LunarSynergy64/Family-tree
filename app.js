@@ -858,6 +858,27 @@ function renderPedigree(){
 
   const xs = placed.map(n=>n.x), gens = placed.map(n=>n.gen);
   const minX = Math.min(...xs), maxX = Math.max(...xs), minGen = Math.min(...gens), maxGen = Math.max(...gens);
+  // A manual drag carries the whole blood-descendant line with it, same
+  // as if every one of them had been selected and dragged together -
+  // otherwise expanding a collapsed branch that's been moved elsewhere
+  // puts its kids back at their old, un-moved spot, nowhere near the box
+  // that supposedly represents them now. Each person's OWN layoutDx/Dy
+  // (see offsetOf) is still just their own personal nudge on top of
+  // that, for fine-tuning within the group it's now riding along with -
+  // dragging never writes anything other than that personal nudge (see
+  // onLayoutDragEnd), only rendering adds the parent's share back in.
+  const placedIds = new Set(placed.map(n=>n.id));
+  const cumCache = new Map();
+  function cumOffsetOf(id){
+    if(cumCache.has(id)) return cumCache.get(id);
+    const own = offsetOf(id);
+    cumCache.set(id, own); // placeholder breaks any accidental cycle
+    const p = P(id);
+    const parentId = p && (p.parents||[]).find(pid=>placedIds.has(pid));
+    const result = parentId ? {dx: own.dx+cumOffsetOf(parentId).dx, dy: own.dy+cumOffsetOf(parentId).dy} : own;
+    cumCache.set(id, result);
+    return result;
+  }
   // Generous padding on every side, not just enough to fit the content -
   // gives real room to grab the background and pan around (especially
   // above the topmost row, which used to sit flush against the edge with
@@ -872,7 +893,7 @@ function renderPedigree(){
   // a buffer past the farthest current drag so there's room to keep going.
   const BASE_ROOM = 400, DRAG_BUFFER = 400;
   let maxOffX = 0, maxOffY = 0;
-  placed.forEach(n=>{ const o = offsetOf(n.id); maxOffX = Math.max(maxOffX, Math.abs(o.dx)); maxOffY = Math.max(maxOffY, Math.abs(o.dy)); });
+  placed.forEach(n=>{ const o = cumOffsetOf(n.id); maxOffX = Math.max(maxOffX, Math.abs(o.dx)); maxOffY = Math.max(maxOffY, Math.abs(o.dy)); });
   const PAD_X = 220 + Math.max(BASE_ROOM, maxOffX + DRAG_BUFFER);
   const PAD_Y = 220 + Math.max(BASE_ROOM, maxOffY + DRAG_BUFFER);
   pendingPadDelta = lastPadX!=null ? {dx: PAD_X-lastPadX, dy: PAD_Y-lastPadY} : null;
@@ -896,8 +917,8 @@ function renderPedigree(){
     rowY.set(g1, rowY.get(g0) + ROW_H*((s0+s1)/2)*(g1-g0));
   }
   const py = g => (rowY.get(g)||0) + PAD_Y;
-  const pxRaw = (id, x) => px(x) + offsetOf(id).dx;
-  const pyAdj = (id, gen) => py(gen) + offsetOf(id).dy;
+  const pxRaw = (id, x) => px(x) + cumOffsetOf(id).dx;
+  const pyAdj = (id, gen) => py(gen) + cumOffsetOf(id).dy;
   // Hard guarantee against two boxes ever rendering on top of each
   // other, regardless of any upstream width-reservation edge case or a
   // manual resize that makes one box wider than its own reserved slot -

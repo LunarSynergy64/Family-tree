@@ -1308,6 +1308,8 @@ $("#menuBtn").addEventListener("click", () => {
   $("#inviteName").textContent = `Or they can tap "Join a tree" and type the name "${tree.name}" with the password.`;
   $("#forgetBtn").textContent = "Remove this tree from this device";
   $("#forgetBtn").dataset.armed = "";
+  $("#resetLayoutBtn").textContent = "Reset everyone's manual position and size";
+  $("#resetLayoutBtn").dataset.armed = "";
   const f = P(rootId);
   $("#setDefaultBtn").hidden = !f || f.placeholder || tree.defaultFocus===f.id;
   $("#setDefaultBtn").textContent = f ? `Set ${displayName(f)||"this person"} as everyone's starting point` : "Set as everyone's starting point";
@@ -1340,6 +1342,25 @@ $("#forgetBtn").addEventListener("click", e => {
   const b = e.currentTarget;
   if(!b.dataset.armed){ b.dataset.armed = "1"; b.textContent = "Tap again to remove. The tree stays online for everyone else."; return; }
   forgetTree(tree.key); $("#menu").hidden = true; showHome();
+});
+// A manual drag now carries its whole branch along (see cumOffsetOf in
+// renderPedigree), so anyone whose own positions were set before that -
+// every one of their ancestors' own separate nudges now stacking on top
+// of theirs too - can end up scattered far from where they actually
+// meant to put them. This clears every manual position and resize back
+// to the plain auto-layout, all at once, to start over from a clean
+// slate rather than untangling that by hand person by person. Collapsed
+// branches are left exactly as they are - this is about position and
+// size only, same as the button says.
+$("#resetLayoutBtn").addEventListener("click", async e => {
+  const b = e.currentTarget;
+  if(!b.dataset.armed){ b.dataset.armed = "1"; b.textContent = "Tap again to reset everyone to their default spot and size."; return; }
+  $("#menu").hidden = true;
+  const toReset = [...people.values()].filter(p => p.layoutDx || p.layoutDy || p.layoutScale);
+  toast("Resetting everyone's position…");
+  await Promise.all(toReset.map(p => put({...p, layoutDx:0, layoutDy:0, layoutScale:0})));
+  render();
+  toast(`${toReset.length} ${toReset.length===1?"person is":"people are"} back to their default position and size.`);
 });
 
 /* ================= pan the grid by dragging the background =================

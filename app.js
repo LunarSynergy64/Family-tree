@@ -222,6 +222,21 @@ $("#createForm").addEventListener("submit", async e => {
 /* ================= family relationships ================= */
 const parentsOf = p => (p.parents||[]).map(P).filter(Boolean);
 const partnersOf = p => (p.spouses||[]).map(P).filter(Boolean);
+// Everyone reachable by following spouses links from id, however many
+// hops - not just id's own direct partners. A remarriage (id's two
+// spouses, not married to each other) is still one connected group this
+// way, so moving or collapsing any one of the three - not only id
+// itself - carries the whole group, matching how they're always drawn
+// adjacent to one another regardless of which of them you start from.
+function partnerGroupOf(id){
+  const group = new Set([id]), queue = [id];
+  while(queue.length){
+    const p = P(queue.pop());
+    ((p && p.spouses) || []).forEach(spId => { if(!group.has(spId)){ group.add(spId); queue.push(spId); } });
+  }
+  group.delete(id);
+  return [...group].map(P).filter(Boolean);
+}
 const childrenOf = id => [...people.values()].filter(c => (c.parents||[]).includes(id));
 // What the layout actually draws below someone - the true list, unless
 // they're collapsed, in which case nothing (their own box stands in for
@@ -775,10 +790,12 @@ function bubbleHtml(n, x, y){
   // movable as a single unit in Edit Layout - their kids are never
   // placed at all while collapsed (see visibleChildren), not just
   // visually hidden, so nothing below has to be squeezed in anywhere.
-  // Never on a dim in-law: their own line isn't expanded here regardless
-  // (see placeKidsBelow/placeAncestor), so there'd be nothing to toggle.
+  // Shown on a dim in-law too (toggling still collapses the couple
+  // together, see toggleCollapse) even though their own line isn't
+  // expanded here regardless - any recorded kids of theirs are still
+  // real, just not the ones currently drawn from this particular pivot.
   const kidCount = childrenOf(p.id).length;
-  const collapseBadge = (!n.dim && kidCount>0)
+  const collapseBadge = (kidCount>0)
     ? ` <span class="collapseBadge" data-collapse="${esc(p.id)}" title="${p.collapsed ? `Show ${kidCount===1?"their child":kidCount+" children"} again` : `Hide ${kidCount===1?"their child":kidCount+" children"} for now`}">${p.collapsed ? "+"+kidCount : "−"}</span>`
     : "";
   return `<button class="node${n.dim?" dim":""}${n.id===focusId?" me":""}${more?" more":""}${p.collapsed?" collapsed":""}${genderCls}${selCls}" style="left:${x}px;top:${y}px;${scaleStyle}" data-go="${esc(n.id)}" data-scale="${scale.toFixed(3)}">
@@ -1140,11 +1157,17 @@ function toggleCollapse(id){
   // (not the current selection) keeps your actual point of reference on
   // screen even if it isn't the selected person.
   const before = $(`.node[data-go="${CSS.escape(id)}"]`)?.getBoundingClientRect();
-  // Not awaited - put()'s own local update lands synchronously before
-  // this call returns (it only awaits the network write after that), so
-  // rendering right away gives instant feedback instead of waiting on a
-  // round trip for what's otherwise a purely visual toggle.
-  put({...p, collapsed: !p.collapsed});
+  // A couple collapses and expands together, same as moving one takes
+  // the rest with it (see startLayoutDrag, partnerGroupOf) - whichever
+  // of them actually ends up as the blood pivot in some other view,
+  // their own collapsed flag already matches instead of the group
+  // quietly falling out of sync. Not awaited - put()'s own local update
+  // lands synchronously before this call returns (it only awaits the
+  // network write after that), so rendering right away gives instant
+  // feedback instead of waiting on a round trip for what's otherwise a
+  // purely visual toggle.
+  const next = !p.collapsed;
+  [p, ...partnerGroupOf(id)].forEach(person => put({...person, collapsed: next}));
   render();
   const afterEl = $(`.node[data-go="${CSS.escape(id)}"]`);
   if(before && afterEl){
@@ -1429,7 +1452,13 @@ function onMarqueeEnd(){
    Connector lines re-snap onto the new position on that final render. */
 let layoutDrag = null;
 function startLayoutDrag(e, id){
-  const ids = selectedIds.has(id) ? [...selectedIds] : [id];
+  // Outside an explicit multi-select (which already says exactly who
+  // should move), dragging someone always takes their whole connected
+  // partner group with them (see partnerGroupOf) - a couple, or a
+  // remarriage's three, is already drawn right next to each other, so
+  // moving one without the rest would only ever pull them apart, never
+  // somewhere that read as intentional.
+  const ids = selectedIds.has(id) ? [...selectedIds] : [id, ...partnerGroupOf(id).map(sp=>sp.id)];
   const startOffsets = new Map(ids.map(i=>{ const o=offsetOf(i); return [i, {dx:o.dx, dy:o.dy}]; }));
   layoutDrag = {ids, startX:e.clientX, startY:e.clientY, startOffsets, moved:false};
   document.addEventListener("mousemove", onLayoutDragMove);

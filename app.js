@@ -1678,6 +1678,12 @@ app.addEventListener("mousedown", e => {
   if(e.target.closest("[data-collapse]")) return; // let the click handler toggle it, not start a drag
   const nodeEl = e.target.closest(".node");
   if(editLayout && nodeEl){ e.preventDefault(); return startLayoutDrag(e, nodeEl.dataset.go); }
+  const frameEl = e.target.closest("[data-couple]");
+  // Grabbing the frame itself (not a person inside it) drags the whole
+  // couple together, same as grabbing either person does - a plain click
+  // with no movement still opens the options sheet, since startLayoutDrag
+  // only flips `dragged` once the mouse actually moves.
+  if(editLayout && frameEl){ e.preventDefault(); return startLayoutDrag(e, frameEl.dataset.couple.split(",")[0]); }
   if(e.target.closest(".node") || e.target.closest(".dock")) return;
   if(editLayout) return startMarquee(e);
   panState = {x:e.clientX, y:e.clientY, left:app.scrollLeft, top:app.scrollTop};
@@ -1709,6 +1715,10 @@ document.addEventListener("click", e => {
   // not on a person inside it - no need to check editLayout first.
   const cf = e.target.closest("[data-couple]");
   if(cf) return openCoupleSheet(cf.dataset.couple.split(","));
+  // The couple sheet's own close controls need the same early exemption -
+  // otherwise closing it while editLayout is on falls into the "clear
+  // selection" branch below instead, leaving the sheet stuck open.
+  if(e.target.closest("[data-closecouple]")){ $("#coupleOptions").hidden = true; return; }
   if(editLayout){
     if(e.target.closest("[data-resize]")) return;
     const node = e.target.closest(".node");
@@ -1745,7 +1755,6 @@ document.addEventListener("click", e => {
   if(e.target.closest("[data-close]")) return closeSheet();
   if(e.target.closest("[data-closemenu]")) $("#menu").hidden = true;
   if(e.target.closest("[data-closeresolve]")) $("#resolveParents").hidden = true;
-  if(e.target.closest("[data-closecouple]")) $("#coupleOptions").hidden = true;
 });
 document.addEventListener("keydown", e => { if(e.key==="Escape"){ closeSheet(); $("#menu").hidden = true; } });
 app.addEventListener("input", e => { if(e.target.id==="q"){ query=e.target.value; render(); } });

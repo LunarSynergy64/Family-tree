@@ -1577,14 +1577,17 @@ function onMarqueeEnd(){
    so it stays smooth), then persisted to Firestore once the drag ends.
    Connector lines re-snap onto the new position on that final render. */
 let layoutDrag = null;
-function startLayoutDrag(e, id){
+function startLayoutDrag(e, id, forceGroup=false){
   // Outside an explicit multi-select (which already says exactly who
   // should move), dragging someone always takes their whole connected
   // partner group with them (see partnerGroupOf) - a couple, or a
   // remarriage's three, is already drawn right next to each other, so
   // moving one without the rest would only ever pull them apart, never
-  // somewhere that read as intentional.
-  const ids = selectedIds.has(id) ? [...selectedIds] : [id, ...partnerGroupOf(id).map(sp=>sp.id)];
+  // somewhere that read as intentional. Grabbing the couple's own frame
+  // (forceGroup) always means the whole group regardless of whatever a
+  // stray earlier tap left selected - a single leftover selected id would
+  // otherwise read as an explicit "just move this one" multi-select.
+  const ids = (!forceGroup && selectedIds.has(id)) ? [...selectedIds] : [id, ...partnerGroupOf(id).map(sp=>sp.id)];
   const startOffsets = new Map(ids.map(i=>{ const o=offsetOf(i); return [i, {dx:o.dx, dy:o.dy}]; }));
   layoutDrag = {ids, startX:e.clientX, startY:e.clientY, startOffsets, moved:false};
   document.addEventListener("mousemove", onLayoutDragMove);
@@ -1683,7 +1686,7 @@ app.addEventListener("mousedown", e => {
   // couple together, same as grabbing either person does - a plain click
   // with no movement still opens the options sheet, since startLayoutDrag
   // only flips `dragged` once the mouse actually moves.
-  if(editLayout && frameEl){ e.preventDefault(); return startLayoutDrag(e, frameEl.dataset.couple.split(",")[0]); }
+  if(editLayout && frameEl){ e.preventDefault(); return startLayoutDrag(e, frameEl.dataset.couple.split(",")[0], true); }
   if(e.target.closest(".node") || e.target.closest(".dock")) return;
   if(editLayout) return startMarquee(e);
   panState = {x:e.clientX, y:e.clientY, left:app.scrollLeft, top:app.scrollTop};

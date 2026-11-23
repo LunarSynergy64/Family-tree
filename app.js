@@ -796,10 +796,17 @@ function bubbleHtml(n, x, y){
   const scaleStyle = `--ns:${scale.toFixed(3)};`;
   const selected = editLayout && selectedIds.has(n.id);
   const selCls = selected ? " selected" : "";
+  // A box nobody's ever dragged reads as "still at its default spot,
+  // waiting to actually be placed" - only worth flagging while arranging
+  // things by hand (see Edit Layout's own toast), not during normal
+  // browsing, where it would just look unfinished for every tree that's
+  // never touched manual positioning at all.
+  const unplaced = editLayout && n.id!==focusId && p.layoutDx==null && p.layoutDy==null;
+  const unplacedCls = unplaced ? " unplaced" : "";
   // Only a selected box gets a resize handle, and only in Edit Layout mode
   // - otherwise it'd just be a stray dot cluttering every normal view.
   const handle = selected ? `<span class="resizeHandle" data-resize="${esc(n.id)}"></span>` : "";
-  if(p.placeholder) return `<button class="node ph${selCls}" style="left:${x}px;top:${y}px;${scaleStyle}" data-go="${esc(n.id)}" data-scale="${scale.toFixed(3)}">Unknown${handle}</button>`;
+  if(p.placeholder) return `<button class="node ph${selCls}${unplacedCls}" style="left:${x}px;top:${y}px;${scaleStyle}" data-go="${esc(n.id)}" data-scale="${scale.toFixed(3)}">Unknown${handle}</button>`;
   // A sibling or dead-end spouse never expands further themselves - this
   // just signals there's recorded family beyond this dead end, tappable
   // (re-centering the grid on them) to actually see it.
@@ -824,7 +831,7 @@ function bubbleHtml(n, x, y){
   const collapseBadge = (kidCount>0)
     ? ` <span class="collapseBadge" data-collapse="${esc(p.id)}" title="${p.collapsed ? `Show ${kidCount===1?"their child":kidCount+" children"} again` : `Hide ${kidCount===1?"their child":kidCount+" children"} for now`}">${p.collapsed ? "+"+kidCount : "−"}</span>`
     : "";
-  return `<button class="node${n.dim?" dim":""}${n.id===focusId?" me":""}${more?" more":""}${p.collapsed?" collapsed":""}${genderCls}${selCls}" style="left:${x}px;top:${y}px;${scaleStyle}" data-go="${esc(n.id)}" data-scale="${scale.toFixed(3)}">
+  return `<button class="node${n.dim?" dim":""}${n.id===focusId?" me":""}${more?" more":""}${p.collapsed?" collapsed":""}${genderCls}${selCls}${unplacedCls}" style="left:${x}px;top:${y}px;${scaleStyle}" data-go="${esc(n.id)}" data-scale="${scale.toFixed(3)}">
     <span class="nm">${esc(displayName(p)||"Unnamed")}${n.divorced?` <span class="divorcedBadge" title="Divorced">✕</span>`:""}${uncertainBadge}${collapseBadge}</span>
     ${p.maidenName?`<span class="maiden">(${esc(p.maidenName)})</span>`:""}
     <span class="yrs${birthKnown(p)?"":" unk"}">${esc(birthLabel(p))}</span>
@@ -1006,10 +1013,34 @@ function renderPedigree(){
 
   const linesHtml = renderEdges(edges, px, py, pxAdj, pyAdj);
   const nodesHtml = placed.map(n => bubbleHtml(n, pxAdj(n.id,n.x), pyAdj(n.id,n.gen))).join("");
+  // A clickable frame drawn once around each couple (or a remarriage's
+  // three) actually on screen together - behind the individual boxes in
+  // the DOM, so clicking one of them still hits that box first, and only
+  // the surrounding gap/background inside the frame opens the couple's
+  // own options (see openCoupleSheet). partnerGroupOf, filtered to
+  // whoever's actually placed at this same generation, is the group;
+  // whichever member is reached first in placed claims it, so it's
+  // rendered exactly once, not once per person in it.
+  const frameClaimed = new Set();
+  const framesHtml = placed.map(n=>{
+    if(frameClaimed.has(n.id) || n.dim) return "";
+    const partners = partnerGroupOf(n.id).filter(sp => placed.some(pn=>pn.id===sp.id && pn.gen===n.gen));
+    if(!partners.length) return "";
+    const members = [n, ...partners.map(sp=>placed.find(pn=>pn.id===sp.id && pn.gen===n.gen))];
+    members.forEach(m=>frameClaimed.add(m.id));
+    const FRAME_PAD = 14;
+    const edges2 = members.map(m=>{ const cx = pxAdj(m.id,m.x); const half = halfWidthOf(m.id); return [cx-half, cx+half]; });
+    const left = Math.min(...edges2.map(e=>e[0])) - FRAME_PAD, right = Math.max(...edges2.map(e=>e[1])) + FRAME_PAD;
+    const maxHalfH = Math.max(...members.map(m=>estHalfHeight(m.id)));
+    const cy = pyAdj(n.id, n.gen);
+    const top = cy - maxHalfH - FRAME_PAD, frameHeight = maxHalfH*2 + FRAME_PAD*2;
+    return `<div class="coupleFrame" data-couple="${esc(members.map(m=>m.id).join(","))}" style="left:${left}px;top:${top}px;width:${(right-left)}px;height:${frameHeight}px"></div>`;
+  }).join("");
 
   const selected = P(focusId);
   return `<div class="pedigree" style="width:${width}px;height:${height}px">
     <svg class="lines" width="${width}" height="${height}">${linesHtml}</svg>
+    ${framesHtml}
     ${nodesHtml}
   </div>${dockHtml(selected)}`;
 }
@@ -1236,6 +1267,32 @@ $("#resolveB").addEventListener("click", async () => {
     toast(`Confirmed - ${displayName(partner)||"their partner"}'s parents.`);
     render();
   }
+});
+
+let coupleIds = [];
+function openCoupleSheet(ids){
+  const members = ids.map(P).filter(Boolean); if(!members.length) return;
+  coupleIds = members.map(m=>m.id);
+  const el = $(`.node[data-go="${CSS.escape(coupleIds[0])}"]`);
+  $("#coupleSize").value = el ? (parseFloat(el.dataset.scale)||1).toFixed(2) : "1.00";
+  const uncertain = members.find(m=>m.parentsUncertain);
+  $("#coupleResolveBtn").hidden = !uncertain;
+  $("#coupleResolveBtn").dataset.for = uncertain ? uncertain.id : "";
+  $("#coupleOptions").hidden = false;
+}
+$("#coupleResolveBtn").addEventListener("click", () => {
+  const id = $("#coupleResolveBtn").dataset.for; if(!id) return;
+  $("#coupleOptions").hidden = true;
+  openResolveSheet(id);
+});
+$("#coupleSize").addEventListener("change", async () => {
+  const scale = clampScale(parseFloat($("#coupleSize").value)||1);
+  $("#coupleSize").value = scale.toFixed(2);
+  for(const id of coupleIds){
+    const p = P(id); if(!p) continue;
+    await put({...p, layoutScale: scale});
+  }
+  render();
 });
 
 $("#f-existing").addEventListener("change", e => $("#sheetForm").classList.toggle("picking", !!e.target.value));
@@ -1647,6 +1704,11 @@ document.addEventListener("click", e => {
   // works while arranging boxes by hand, not just in normal browsing.
   const cb = e.target.closest("[data-collapse]");
   if(cb) return toggleCollapse(cb.dataset.collapse);
+  // Frames sit behind the individual node buttons in the DOM, so a click
+  // only ever reaches one here when it landed on the frame's own margin,
+  // not on a person inside it - no need to check editLayout first.
+  const cf = e.target.closest("[data-couple]");
+  if(cf) return openCoupleSheet(cf.dataset.couple.split(","));
   if(editLayout){
     if(e.target.closest("[data-resize]")) return;
     const node = e.target.closest(".node");
@@ -1683,6 +1745,7 @@ document.addEventListener("click", e => {
   if(e.target.closest("[data-close]")) return closeSheet();
   if(e.target.closest("[data-closemenu]")) $("#menu").hidden = true;
   if(e.target.closest("[data-closeresolve]")) $("#resolveParents").hidden = true;
+  if(e.target.closest("[data-closecouple]")) $("#coupleOptions").hidden = true;
 });
 document.addEventListener("keydown", e => { if(e.key==="Escape"){ closeSheet(); $("#menu").hidden = true; } });
 app.addEventListener("input", e => { if(e.target.id==="q"){ query=e.target.value; render(); } });

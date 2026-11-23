@@ -170,6 +170,9 @@ main{max-width:1400px;margin:0 auto;padding:18px var(--gutter-r) calc(48px + env
 .uncertainBadge{font-size:.78em;color:var(--muted);font-weight:700;cursor:pointer}
 .collapseBadge{display:inline-grid;place-items:center;min-width:15px;height:15px;padding:0 3px;border-radius:999px;background:var(--accent-soft);color:var(--accent);font-size:.7em;font-weight:700;cursor:pointer;vertical-align:middle}
 .node.collapsed{border-style:dashed}
+.node.unplaced{border-style:dashed;opacity:.55}
+.coupleFrame{position:absolute;border:1.5px dashed var(--line);border-radius:18px;cursor:pointer}
+.coupleFrame:hover{border-color:var(--accent)}
 .copyrow{display:flex;gap:8px}
 .copyrow input{flex:1;min-width:0}
 .menu-list{display:grid;gap:10px;justify-items:start;padding-top:6px;border-top:1px solid var(--line)}

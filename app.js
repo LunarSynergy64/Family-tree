@@ -245,6 +245,32 @@ const childrenOf = id => [...people.values()].filter(c => (c.parents||[]).includ
 // whether it's currently hidden, so this is only for placement/width
 // math, never a replacement for childrenOf itself.
 const visibleChildren = id => { const p = P(id); return (p && p.collapsed) ? [] : childrenOf(id); };
+// Everyone connected to id purely by blood - id's own ancestor chain,
+// however far back, plus everyone descended from any of them (so
+// siblings, cousins, the lot, same as the pedigree itself shows). Two
+// strictly separate passes, not one mixed walk: going up only ever
+// follows id's own recorded parents, and going down from there only
+// ever follows childrenOf, never back up through a discovered child's
+// OTHER parent - that other parent is exactly where an in-law's own,
+// separate blood family would start (they can easily be a real blood
+// parent of a shared child without being blood to id at all), so a bulk
+// action scoped this way never reaches into it.
+function bloodFamilyOf(id){
+  const ancestors = new Set([id]);
+  let queue = [id];
+  while(queue.length){
+    const cur = queue.pop();
+    const p = P(cur); if(!p) continue;
+    (p.parents||[]).forEach(pid => { if(!ancestors.has(pid)){ ancestors.add(pid); queue.push(pid); } });
+  }
+  const visited = new Set(ancestors);
+  queue = [...ancestors];
+  while(queue.length){
+    const cur = queue.pop();
+    childrenOf(cur).forEach(k => { if(!visited.has(k.id)){ visited.add(k.id); queue.push(k.id); } });
+  }
+  return [...visited];
+}
 function siblingsOf(p){
   const mine = p.parents||[]; if(!mine.length) return [];
   return [...people.values()].filter(s => s.id!==p.id && (s.parents||[]).some(x=>mine.includes(x)))
@@ -1333,6 +1359,8 @@ $("#menuBtn").addEventListener("click", () => {
   $("#forgetBtn").dataset.armed = "";
   $("#resetLayoutBtn").textContent = "Reset everyone's manual position and size";
   $("#resetLayoutBtn").dataset.armed = "";
+  $("#declutterBtn").textContent = "Start this family over: hide everyone but the oldest generation";
+  $("#declutterBtn").dataset.armed = "";
   const f = P(rootId);
   $("#setDefaultBtn").hidden = !f || f.placeholder || tree.defaultFocus===f.id;
   $("#setDefaultBtn").textContent = f ? `Set ${displayName(f)||"this person"} as everyone's starting point` : "Set as everyone's starting point";
@@ -1384,6 +1412,47 @@ $("#resetLayoutBtn").addEventListener("click", async e => {
   await Promise.all(toReset.map(p => put({...p, layoutDx:0, layoutDy:0, layoutScale:0})));
   render();
   toast(`${toReset.length} ${toReset.length===1?"person is":"people are"} back to their default position and size.`);
+});
+// Scoped to rootId's own blood family (see bloodFamilyOf) - never an
+// in-law's, even though their boxes sit right there on the same board,
+// since they're a different family's own tree once you re-root on them.
+// Collapsing EVERYONE in that family, oldest generation included, is
+// what actually leaves just the top row on screen - a person's own
+// collapsed flag only ever hides their OWN kids, never themselves (what
+// hides a box is its parent's flag), so whoever has no recorded parents
+// stays visible no matter what their own flag says, same as always. The
+// one catch: the CURRENT root's own parents are always drawn in full
+// going up, collapsed or not (placeAncestor never gates on it - only a
+// descendant's placeKidsBelow/placeDescendant does), so collapsing
+// everyone wouldn't actually hide anything below the root unless the
+// root itself is also the oldest generation. Re-rooting onto whoever's
+// directly above the current root (not just anyone pulled into the
+// family through a shared descendant) after collapsing is what actually
+// puts that mechanism to work. Tapping one of them back open reveals
+// only their own kids (still collapsed themselves, from this same
+// pass), so the rest comes back one generation at a time instead of all
+// at once, each one placed by hand as it appears. Position/size resets
+// too, same as resetLayoutBtn, so what reappears doesn't carry forward
+// whatever mess it had before.
+$("#declutterBtn").addEventListener("click", async e => {
+  const b = e.currentTarget;
+  if(!b.dataset.armed){ b.dataset.armed = "1"; b.textContent = "Tap again to hide everyone in this family except the oldest generation."; return; }
+  $("#menu").hidden = true;
+  const familyIds = bloodFamilyOf(rootId);
+  const topCount = familyIds.filter(id => { const p=P(id); return !p || !(p.parents||[]).length; }).length;
+  let oldest = rootId;
+  while(true){
+    const parentId = (P(oldest)?.parents||[])[0];
+    if(!parentId || !P(parentId)) break;
+    oldest = parentId;
+  }
+  toast("Tidying up this family…");
+  await Promise.all(familyIds.map(id=>{
+    const p = P(id); if(!p) return null;
+    return put({...p, collapsed:true, layoutDx:0, layoutDy:0, layoutScale:0});
+  }));
+  go(oldest);
+  toast(`Down to ${topCount} at the top - tap one to bring their kids back.`);
 });
 
 /* ================= pan the grid by dragging the background =================

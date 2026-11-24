@@ -360,6 +360,21 @@ async function put(p){
   try { await setDoc(doc(fs, "trees", tree.key, "people", p.id), data); return true; }
   catch(e){ toast("That change didn't save (" + (e.code||"error") + "). Try again."); return false; }
 }
+// A plain Promise.all over many people at once (reset, declutter) can
+// have a handful quietly fail under real-world load - put() already
+// toasts each one, but the op as a whole would otherwise just leave
+// those few stuck as they were, looking like the button needs pressing
+// again. Retries only the ones that actually failed, a few times with a
+// short pause between, and returns whoever still hasn't saved after that.
+async function putAll(list, fields){
+  let remaining = list;
+  for(let attempt=0; attempt<4 && remaining.length; attempt++){
+    if(attempt>0) await new Promise(r=>setTimeout(r, 500));
+    const results = await Promise.all(remaining.map(p => put({...p, ...fields})));
+    remaining = remaining.filter((p,i) => !results[i]);
+  }
+  return remaining;
+}
 async function drop(id){
   people.delete(id);
   try { await deleteDoc(doc(fs, "trees", tree.key, "people", id)); }
@@ -1354,8 +1369,14 @@ async function placeChild(id){
   // default in as a real, manual position (0,0: no added offset) instead
   // of making the person drag a box that was never actually moving.
   // Still an ordinary placed box afterward, draggable like any other.
-  await put({...p, layoutDx:0, layoutDy:0});
+  const ok = await put({...p, layoutDx:0, layoutDy:0});
+  if(!ok) return; // put() already toasted why it didn't save
   render();
+  // Scrolled into view, not just toasted about - on a big tree a brand
+  // new box can easily land somewhere off the current scroll position,
+  // and "it said it worked" isn't the same as actually seeing it appear.
+  const node = $(`.node[data-go="${CSS.escape(id)}"]`);
+  if(node) node.scrollIntoView({block:"center", inline:"center"});
   toast(`${displayName(p)||"They"} are placed below their parents - drag anytime to move them.`);
 }
 $("#coupleResolveBtn").addEventListener("click", () => {
@@ -1544,9 +1565,12 @@ $("#resetLayoutBtn").addEventListener("click", async e => {
   $("#menu").hidden = true;
   const toReset = [...people.values()].filter(p => p.layoutDx!=null || p.layoutDy!=null || p.layoutScale!=null);
   toast("Resetting everyone's position…");
-  await Promise.all(toReset.map(p => put({...p, layoutDx:null, layoutDy:null, layoutScale:null})));
+  const failed = await putAll(toReset, {layoutDx:null, layoutDy:null, layoutScale:null});
   render();
-  toast(`${toReset.length} ${toReset.length===1?"person is":"people are"} back to their default position and size.`);
+  const done = toReset.length - failed.length;
+  toast(failed.length
+    ? `${done} of ${toReset.length} reset - ${failed.length} didn't save, tap Reset again for those.`
+    : `${toReset.length} ${toReset.length===1?"person is":"people are"} back to their default position and size.`);
 });
 // Scoped to rootId's own blood family (see bloodFamilyOf) - never an
 // in-law's, even though their boxes sit right there on the same board,
@@ -1582,12 +1606,12 @@ $("#declutterBtn").addEventListener("click", async e => {
     oldest = parentId;
   }
   toast("Tidying up this family…");
-  await Promise.all(familyIds.map(id=>{
-    const p = P(id); if(!p) return null;
-    return put({...p, collapsed:true, layoutDx:null, layoutDy:null, layoutScale:null});
-  }));
+  const toClear = familyIds.map(P).filter(Boolean);
+  const failed = await putAll(toClear, {collapsed:true, layoutDx:null, layoutDy:null, layoutScale:null});
   go(oldest);
-  toast(`Down to ${topCount} at the top - tap one to bring their kids back.`);
+  toast(failed.length
+    ? `Down to ${topCount} at the top - ${failed.length} didn't fully tidy, tap this again if they still show.`
+    : `Down to ${topCount} at the top - tap one to bring their kids back.`);
 });
 
 /* ================= pan the grid by dragging the background =================

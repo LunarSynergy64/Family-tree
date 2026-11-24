@@ -262,13 +262,23 @@ function unplacedChildrenOf(memberIds){
   return [...new Map(memberIds.flatMap(id=>childrenOf(id)).map(k=>[k.id,k])).values()]
     .filter(k => k.layoutDx==null && k.layoutDy==null);
 }
-// What the layout actually draws below someone - the true list, unless
-// they're collapsed, in which case nothing (their own box stands in for
-// the whole branch). Everywhere else - the "X children" count, deleting
-// someone, linking partners - still needs the true list regardless of
-// whether it's currently hidden, so this is only for placement/width
-// math, never a replacement for childrenOf itself.
-const visibleChildren = id => { const p = P(id); return (p && p.collapsed) ? [] : childrenOf(id); };
+// What the layout actually draws below someone - never anyone collapsed
+// away (their own box stands in for the whole branch), and, on top of
+// that, never a child who hasn't actually been placed yet (added fresh,
+// or revealed by un-collapsing - either way nothing to show until they
+// show up in the couple panel's "not yet placed" list and get placed
+// from there, or get dragged once they are showing). Only descendants
+// work this way - a blood person's own spouse still renders alongside
+// them regardless, same as always, and ancestors above the root aren't
+// touched by this at all. Everywhere else - the "X children" count,
+// deleting someone, linking partners - still needs the true list
+// regardless of collapsed/placed state, so this is only for
+// placement/width math, never a replacement for childrenOf itself.
+const visibleChildren = id => {
+  const p = P(id);
+  if(p && p.collapsed) return [];
+  return childrenOf(id).filter(c => c.layoutDx!=null || c.layoutDy!=null);
+};
 // Everyone connected to id purely by blood - id's own ancestor chain,
 // however far back, plus everyone descended from any of them (so
 // siblings, cousins, the lot, same as the pedigree itself shows). Two
@@ -852,8 +862,16 @@ function bubbleHtml(n, x, y){
   const collapseBadge = (kidCount>0)
     ? ` <span class="collapseBadge" data-collapse="${esc(p.id)}" title="${p.collapsed ? `Show ${kidCount===1?"their child":kidCount+" children"} again` : `Hide ${kidCount===1?"their child":kidCount+" children"} for now`}">${p.collapsed ? "+"+kidCount : "−"}</span>`
     : "";
+  // A partnered person's unplaced kids get a badge on their shared
+  // couple frame instead (see framesHtml) - this is only for someone
+  // with no recorded partner at all, who'd otherwise have no way to
+  // even discover those kids exist, let alone open the panel that
+  // places them, since there's no frame to click for them.
+  const soloUnplacedBadge = (!n.dim && !partnerGroupOf(p.id).length && unplacedChildrenOf([p.id]).length>0)
+    ? ` <span class="unplacedBadge" data-couple="${esc(p.id)}" title="Has children not yet placed"></span>`
+    : "";
   return `<button class="node${n.dim?" dim":""}${n.id===focusId?" me":""}${more?" more":""}${p.collapsed?" collapsed":""}${genderCls}${selCls}" style="left:${x}px;top:${y}px;${scaleStyle}" data-go="${esc(n.id)}" data-scale="${scale.toFixed(3)}">
-    <span class="nm">${esc(displayName(p)||"Unnamed")}${n.divorced?` <span class="divorcedBadge" title="Divorced">✕</span>`:""}${uncertainBadge}${collapseBadge}</span>
+    <span class="nm">${esc(displayName(p)||"Unnamed")}${n.divorced?` <span class="divorcedBadge" title="Divorced">✕</span>`:""}${uncertainBadge}${collapseBadge}${soloUnplacedBadge}</span>
     ${p.maidenName?`<span class="maiden">(${esc(p.maidenName)})</span>`:""}
     <span class="yrs${birthKnown(p)?"":" unk"}">${esc(birthLabel(p))}</span>
     ${n.half?`<span class="chip">half</span>`:""}

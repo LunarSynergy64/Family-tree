@@ -1607,16 +1607,34 @@ $("#declutterBtn").addEventListener("click", async e => {
   // existed, with no obvious way to tell why they wouldn't budge.
   const inLawIds = uniq(familyIds.flatMap(id => partnerGroupOf(id).map(sp=>sp.id))).filter(id => !familyIds.includes(id));
   const topCount = familyIds.filter(id => { const p=P(id); return !p || !(p.parents||[]).length; }).length;
+  // Walking up through parents[0] alone was the actual bug behind
+  // "some people are stuck on the board no matter how many resets" -
+  // placeAncestor draws a root's FULL recorded parents unconditionally,
+  // never gated by collapsed/placed (that's only ever a thing for
+  // descendants), so landing "oldest" on someone who still has a valid,
+  // simply-never-walked parents[1] (the ordinary case of one side of a
+  // couple having a deeper recorded line than the other) left that
+  // entire other side permanently showing, immune to every reset - not
+  // because anything was wrong with their data, but because the walk
+  // itself stopped one step too early. Only a person with NO valid
+  // parent in EITHER slot actually has nothing left for placeAncestor
+  // to draw above them.
   let oldest = rootId;
   while(true){
-    const parentId = (P(oldest)?.parents||[])[0];
-    if(!parentId || !P(parentId)) break;
-    oldest = parentId;
+    const validParents = (P(oldest)?.parents||[]).filter(pid=>P(pid));
+    if(!validParents.length) break;
+    oldest = validParents[0];
   }
   toast("Tidying up this family…");
   const toClear = [...familyIds, ...inLawIds].map(P).filter(Boolean);
   const failed = await putAll(toClear, {collapsed:true, layoutDx:null, layoutDy:null, layoutScale:null});
   go(oldest);
+  // Re-rooting here only changes this session's in-memory view - without
+  // this, reloading the page snaps straight back to whatever starting
+  // point was saved before (often someone deep in the tree), making its
+  // own full, un-gated ancestor fan reappear every single time no matter
+  // how thoroughly this just tidied things up.
+  await setDefaultFocus(oldest);
   toast(failed.length
     ? `Down to ${topCount} at the top - ${failed.length} didn't fully tidy, tap this again if they still show.`
     : `Down to ${topCount} at the top - tap one to bring their kids back.`);

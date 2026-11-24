@@ -1297,7 +1297,42 @@ function openCoupleSheet(ids){
   const uncertain = members.find(m=>m.parentsUncertain);
   $("#coupleResolveBtn").hidden = !uncertain;
   $("#coupleResolveBtn").dataset.for = uncertain ? uncertain.id : "";
+
+  // "Divorced" here just reflects the existing per-pair field, same one
+  // the tie-line's X on the board already reads - this is only a second,
+  // plainer-language place to see it, not a new source of truth.
+  const divorcedPair = members.length>1 && isDivorced(members[0], members[1]) ? [members[0], members[1]]
+    : members.length>2 && isDivorced(members[0], members[2]) ? [members[0], members[2]] : null;
+  const infoLines = [];
+  if(divorcedPair) infoLines.push(`${displayName(divorcedPair[0])||"They"} and ${displayName(divorcedPair[1])||"their partner"} are marked divorced.`);
+  if(uncertain) infoLines.push(`Not sure yet whose parents these are - ${displayName(uncertain)||"one of them"}'s or their partner's.`);
+  $("#coupleInfo").innerHTML = infoLines.length ? infoLines.map(esc).join("<br>") : "";
+
+  // Kids belong to whichever specific member(s) fathered/mothered them,
+  // not the group as a whole - a remarriage's two partners can easily
+  // have no children together at all - so this is the union of each
+  // member's own children, not a single shared list.
+  const kids = [...new Map(members.flatMap(m=>childrenOf(m.id)).map(k=>[k.id,k])).values()]
+    .filter(k => k.layoutDx==null && k.layoutDy==null);
+  $("#coupleKidsWrap").hidden = !kids.length;
+  $("#coupleKidsList").innerHTML = kids.map(k =>
+    `<button type="button" class="ghost" data-placechild="${esc(k.id)}">${esc(displayName(k)||"Unnamed")}</button>`
+  ).join("");
+
   $("#coupleOptions").hidden = false;
+}
+function placeChild(id){
+  if(!P(id)) return;
+  if(!editLayout){
+    editLayout = true;
+    $("#editLayoutBtn").setAttribute("aria-pressed", "true");
+    app.classList.add("editingLayout");
+  }
+  selectedIds = new Set([id]);
+  render();
+  const node = $(`.node[data-go="${CSS.escape(id)}"]`);
+  if(node) node.scrollIntoView({block:"center", inline:"center"});
+  toast("Drag this box into place.");
 }
 $("#coupleResolveBtn").addEventListener("click", () => {
   const id = $("#coupleResolveBtn").dataset.for; if(!id) return;
@@ -1741,6 +1776,8 @@ document.addEventListener("click", e => {
   // otherwise closing it while editLayout is on falls into the "clear
   // selection" branch below instead, leaving the sheet stuck open.
   if(e.target.closest("[data-closecouple]")){ $("#coupleOptions").hidden = true; return; }
+  const pc = e.target.closest("[data-placechild]");
+  if(pc){ $("#coupleOptions").hidden = true; return placeChild(pc.dataset.placechild); }
   if(editLayout){
     if(e.target.closest("[data-resize]")) return;
     const node = e.target.closest(".node");

@@ -1598,6 +1598,14 @@ $("#declutterBtn").addEventListener("click", async e => {
   if(!b.dataset.armed){ b.dataset.armed = "1"; b.textContent = "Tap again to hide everyone in this family except the oldest generation."; return; }
   $("#menu").hidden = true;
   const familyIds = bloodFamilyOf(rootId);
+  // An in-law married into this family isn't blood, so bloodFamilyOf
+  // correctly leaves their own parents/siblings/other-family untouched -
+  // but their OWN position, specifically as attached to this family, was
+  // never being cleared either, since they're not in familyIds at all.
+  // That left every blood member's spouse permanently stuck whenever they
+  // happened to have an old manual position from before this workflow
+  // existed, with no obvious way to tell why they wouldn't budge.
+  const inLawIds = uniq(familyIds.flatMap(id => partnerGroupOf(id).map(sp=>sp.id))).filter(id => !familyIds.includes(id));
   const topCount = familyIds.filter(id => { const p=P(id); return !p || !(p.parents||[]).length; }).length;
   let oldest = rootId;
   while(true){
@@ -1606,7 +1614,7 @@ $("#declutterBtn").addEventListener("click", async e => {
     oldest = parentId;
   }
   toast("Tidying up this family…");
-  const toClear = familyIds.map(P).filter(Boolean);
+  const toClear = [...familyIds, ...inLawIds].map(P).filter(Boolean);
   const failed = await putAll(toClear, {collapsed:true, layoutDx:null, layoutDy:null, layoutScale:null});
   go(oldest);
   toast(failed.length

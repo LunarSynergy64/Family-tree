@@ -339,9 +339,13 @@ async function put(p){
   if(p.placeholder && !data.name) data.placeholder = true;
   if(p.parentsUncertain) data.parentsUncertain = true;
   if(p.collapsed) data.collapsed = true;
-  if(p.layoutDx) data.layoutDx = p.layoutDx;
-  if(p.layoutDy) data.layoutDy = p.layoutDy;
-  if(p.layoutScale) data.layoutScale = p.layoutScale;
+  // Explicitly-set zero is a real, meaningful value here (see placeChild:
+  // "manually placed, right where the grid already had them" is exactly
+  // dx/dy 0) - only actually missing (null/undefined, the caller clearing
+  // it on purpose) should leave the field out of what gets saved.
+  if(p.layoutDx!=null) data.layoutDx = p.layoutDx;
+  if(p.layoutDy!=null) data.layoutDy = p.layoutDy;
+  if(p.layoutScale!=null) data.layoutScale = p.layoutScale;
   people.set(p.id, {id:p.id, ...data});
   try { await setDoc(doc(fs, "trees", tree.key, "people", p.id), data); return true; }
   catch(e){ toast("That change didn't save (" + (e.code||"error") + "). Try again."); return false; }
@@ -1325,18 +1329,16 @@ function openCoupleSheet(ids){
 
   $("#coupleOptions").hidden = false;
 }
-function placeChild(id){
-  if(!P(id)) return;
-  if(!editLayout){
-    editLayout = true;
-    $("#editLayoutBtn").setAttribute("aria-pressed", "true");
-    app.classList.add("editingLayout");
-  }
-  selectedIds = new Set([id]);
+async function placeChild(id){
+  const p = P(id); if(!p) return;
+  // Their spot right now already IS right below the parents - the grid
+  // puts every child there by default - so "place" just locks that
+  // default in as a real, manual position (0,0: no added offset) instead
+  // of making the person drag a box that was never actually moving.
+  // Still an ordinary placed box afterward, draggable like any other.
+  await put({...p, layoutDx:0, layoutDy:0});
   render();
-  const node = $(`.node[data-go="${CSS.escape(id)}"]`);
-  if(node) node.scrollIntoView({block:"center", inline:"center"});
-  toast("Drag this box into place.");
+  toast(`${displayName(p)||"They"} are placed below their parents - drag anytime to move them.`);
 }
 $("#coupleResolveBtn").addEventListener("click", () => {
   const id = $("#coupleResolveBtn").dataset.for; if(!id) return;
@@ -1522,9 +1524,9 @@ $("#resetLayoutBtn").addEventListener("click", async e => {
   const b = e.currentTarget;
   if(!b.dataset.armed){ b.dataset.armed = "1"; b.textContent = "Tap again to reset everyone to their default spot and size."; return; }
   $("#menu").hidden = true;
-  const toReset = [...people.values()].filter(p => p.layoutDx || p.layoutDy || p.layoutScale);
+  const toReset = [...people.values()].filter(p => p.layoutDx!=null || p.layoutDy!=null || p.layoutScale!=null);
   toast("Resetting everyone's position…");
-  await Promise.all(toReset.map(p => put({...p, layoutDx:0, layoutDy:0, layoutScale:0})));
+  await Promise.all(toReset.map(p => put({...p, layoutDx:null, layoutDy:null, layoutScale:null})));
   render();
   toast(`${toReset.length} ${toReset.length===1?"person is":"people are"} back to their default position and size.`);
 });
@@ -1564,7 +1566,7 @@ $("#declutterBtn").addEventListener("click", async e => {
   toast("Tidying up this family…");
   await Promise.all(familyIds.map(id=>{
     const p = P(id); if(!p) return null;
-    return put({...p, collapsed:true, layoutDx:0, layoutDy:0, layoutScale:0});
+    return put({...p, collapsed:true, layoutDx:null, layoutDy:null, layoutScale:null});
   }));
   go(oldest);
   toast(`Down to ${topCount} at the top - tap one to bring their kids back.`);

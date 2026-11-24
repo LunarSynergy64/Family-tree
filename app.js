@@ -91,7 +91,15 @@ let editLayout = false;
 let selectedIds = new Set();
 function offsetOf(id){
   if(!id) return {dx:0, dy:0};
-  const p = P(id);
+  // A couple's position is read from one deterministically-chosen member
+  // of the group (whoever has the lexicographically smallest id) instead
+  // of each person's own stored fields - so even if the two ever end up
+  // with different layoutDx/Dy on disk (old data from before this box
+  // existed, a bug, a half-applied write), they still always render
+  // locked together, same box, same spot. groupAnchorId is defined further
+  // down but hoists fine - it's a function declaration, same as this one.
+  const anchor = groupAnchorId(id);
+  const p = P(anchor);
   return {dx:(p&&p.layoutDx)||0, dy:(p&&p.layoutDy)||0};
 }
 const app = $("#app");
@@ -236,6 +244,12 @@ function partnerGroupOf(id){
   }
   group.delete(id);
   return [...group].map(P).filter(Boolean);
+}
+// The one id every member of a partner group defers to for shared state
+// (right now, position) - picked by sorting, not by any role, so it's
+// the same answer no matter which member you ask from.
+function groupAnchorId(id){
+  return [id, ...partnerGroupOf(id).map(p=>p.id)].sort()[0];
 }
 const childrenOf = id => [...people.values()].filter(c => (c.parents||[]).includes(id));
 // What the layout actually draws below someone - the true list, unless
@@ -1031,9 +1045,14 @@ function renderPedigree(){
     const FRAME_PAD = 14;
     const edges2 = members.map(m=>{ const cx = pxAdj(m.id,m.x); const half = halfWidthOf(m.id); return [cx-half, cx+half]; });
     const left = Math.min(...edges2.map(e=>e[0])) - FRAME_PAD, right = Math.max(...edges2.map(e=>e[1])) + FRAME_PAD;
-    const maxHalfH = Math.max(...members.map(m=>estHalfHeight(m.id)));
-    const cy = pyAdj(n.id, n.gen);
-    const top = cy - maxHalfH - FRAME_PAD, frameHeight = maxHalfH*2 + FRAME_PAD*2;
+    // Same as the X bound above - each member's own Y, not just n's,
+    // since the group's shared offset still leaves room for a vertical
+    // mismatch (each partner can carry their own separate ancestor
+    // cascade - see cumOffsetOf) that would otherwise clip a box right
+    // out of its own frame.
+    const vEdges = members.map(m=>{ const cy = pyAdj(m.id,m.gen); const half = estHalfHeight(m.id); return [cy-half, cy+half]; });
+    const top = Math.min(...vEdges.map(e=>e[0])) - FRAME_PAD, bottom = Math.max(...vEdges.map(e=>e[1])) + FRAME_PAD;
+    const frameHeight = bottom - top;
     return `<div class="coupleFrame" data-couple="${esc(members.map(m=>m.id).join(","))}" style="left:${left}px;top:${top}px;width:${(right-left)}px;height:${frameHeight}px"></div>`;
   }).join("");
 

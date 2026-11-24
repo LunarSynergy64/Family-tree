@@ -252,6 +252,16 @@ function groupAnchorId(id){
   return [id, ...partnerGroupOf(id).map(p=>p.id)].sort()[0];
 }
 const childrenOf = id => [...people.values()].filter(c => (c.parents||[]).includes(id));
+// Kids belong to whichever specific member(s) fathered/mothered them, not
+// the group as a whole - a remarriage's two partners can easily have no
+// children together at all - so this is the union of each member's own
+// children, never-manually-dragged ones only (see offsetOf's own note on
+// why that, not how the auto layout happens to look, is what "placed"
+// actually means).
+function unplacedChildrenOf(memberIds){
+  return [...new Map(memberIds.flatMap(id=>childrenOf(id)).map(k=>[k.id,k])).values()]
+    .filter(k => k.layoutDx==null && k.layoutDy==null);
+}
 // What the layout actually draws below someone - the true list, unless
 // they're collapsed, in which case nothing (their own box stands in for
 // the whole branch). Everywhere else - the "X children" count, deleting
@@ -810,17 +820,10 @@ function bubbleHtml(n, x, y){
   const scaleStyle = `--ns:${scale.toFixed(3)};`;
   const selected = editLayout && selectedIds.has(n.id);
   const selCls = selected ? " selected" : "";
-  // A box nobody's ever dragged reads as "still at its default spot,
-  // waiting to actually be placed" - only worth flagging while arranging
-  // things by hand (see Edit Layout's own toast), not during normal
-  // browsing, where it would just look unfinished for every tree that's
-  // never touched manual positioning at all.
-  const unplaced = editLayout && n.id!==focusId && p.layoutDx==null && p.layoutDy==null;
-  const unplacedCls = unplaced ? " unplaced" : "";
   // Only a selected box gets a resize handle, and only in Edit Layout mode
   // - otherwise it'd just be a stray dot cluttering every normal view.
   const handle = selected ? `<span class="resizeHandle" data-resize="${esc(n.id)}"></span>` : "";
-  if(p.placeholder) return `<button class="node ph${selCls}${unplacedCls}" style="left:${x}px;top:${y}px;${scaleStyle}" data-go="${esc(n.id)}" data-scale="${scale.toFixed(3)}">Unknown${handle}</button>`;
+  if(p.placeholder) return `<button class="node ph${selCls}" style="left:${x}px;top:${y}px;${scaleStyle}" data-go="${esc(n.id)}" data-scale="${scale.toFixed(3)}">Unknown${handle}</button>`;
   // A sibling or dead-end spouse never expands further themselves - this
   // just signals there's recorded family beyond this dead end, tappable
   // (re-centering the grid on them) to actually see it.
@@ -845,7 +848,7 @@ function bubbleHtml(n, x, y){
   const collapseBadge = (kidCount>0)
     ? ` <span class="collapseBadge" data-collapse="${esc(p.id)}" title="${p.collapsed ? `Show ${kidCount===1?"their child":kidCount+" children"} again` : `Hide ${kidCount===1?"their child":kidCount+" children"} for now`}">${p.collapsed ? "+"+kidCount : "−"}</span>`
     : "";
-  return `<button class="node${n.dim?" dim":""}${n.id===focusId?" me":""}${more?" more":""}${p.collapsed?" collapsed":""}${genderCls}${selCls}${unplacedCls}" style="left:${x}px;top:${y}px;${scaleStyle}" data-go="${esc(n.id)}" data-scale="${scale.toFixed(3)}">
+  return `<button class="node${n.dim?" dim":""}${n.id===focusId?" me":""}${more?" more":""}${p.collapsed?" collapsed":""}${genderCls}${selCls}" style="left:${x}px;top:${y}px;${scaleStyle}" data-go="${esc(n.id)}" data-scale="${scale.toFixed(3)}">
     <span class="nm">${esc(displayName(p)||"Unnamed")}${n.divorced?` <span class="divorcedBadge" title="Divorced">✕</span>`:""}${uncertainBadge}${collapseBadge}</span>
     ${p.maidenName?`<span class="maiden">(${esc(p.maidenName)})</span>`:""}
     <span class="yrs${birthKnown(p)?"":" unk"}">${esc(birthLabel(p))}</span>
@@ -1053,7 +1056,13 @@ function renderPedigree(){
     const vEdges = members.map(m=>{ const cy = pyAdj(m.id,m.gen); const half = estHalfHeight(m.id); return [cy-half, cy+half]; });
     const top = Math.min(...vEdges.map(e=>e[0])) - FRAME_PAD, bottom = Math.max(...vEdges.map(e=>e[1])) + FRAME_PAD;
     const frameHeight = bottom - top;
-    return `<div class="coupleFrame" data-couple="${esc(members.map(m=>m.id).join(","))}" style="left:${left}px;top:${top}px;width:${(right-left)}px;height:${frameHeight}px"></div>`;
+    // The one and only place "unplaced" shows up on the board itself -
+    // a flag on the couple, not a look on the child's own box (which
+    // otherwise reads as "placed" the moment auto layout spaces it out
+    // reasonably, whether or not anyone actually dragged it there).
+    const hasUnplacedKids = unplacedChildrenOf(members.map(m=>m.id)).length>0;
+    const badge = hasUnplacedKids ? `<span class="unplacedBadge" title="Has children not yet placed"></span>` : "";
+    return `<div class="coupleFrame" data-couple="${esc(members.map(m=>m.id).join(","))}" style="left:${left}px;top:${top}px;width:${(right-left)}px;height:${frameHeight}px">${badge}</div>`;
   }).join("");
 
   const selected = P(focusId);
@@ -1308,12 +1317,7 @@ function openCoupleSheet(ids){
   if(uncertain) infoLines.push(`Not sure yet whose parents these are - ${displayName(uncertain)||"one of them"}'s or their partner's.`);
   $("#coupleInfo").innerHTML = infoLines.length ? infoLines.map(esc).join("<br>") : "";
 
-  // Kids belong to whichever specific member(s) fathered/mothered them,
-  // not the group as a whole - a remarriage's two partners can easily
-  // have no children together at all - so this is the union of each
-  // member's own children, not a single shared list.
-  const kids = [...new Map(members.flatMap(m=>childrenOf(m.id)).map(k=>[k.id,k])).values()]
-    .filter(k => k.layoutDx==null && k.layoutDy==null);
+  const kids = unplacedChildrenOf(members.map(m=>m.id));
   $("#coupleKidsWrap").hidden = !kids.length;
   $("#coupleKidsList").innerHTML = kids.map(k =>
     `<button type="button" class="ghost" data-placechild="${esc(k.id)}">${esc(displayName(k)||"Unnamed")}</button>`

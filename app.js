@@ -668,7 +668,12 @@ function placeAncestor(placed, edges, id, excludeSpouseId, xLeft, width, gen, ex
       // shouldn't claim more certainty than is actually known.
       const uncertain = !!person.parentsUncertain;
       const childX = uncertain && partners.length ? [x, ...partners.map(sp=>posOf[sp.id])].reduce((a,b)=>a+b,0)/(partners.length+1) : x;
-      const childId = (uncertain && partners.length) ? null : person.id;
+      // Always a real id, even here - a couple's manual offset is one
+      // shared value now (see groupAnchorId), so reading it through
+      // person.id or their partner's gives the identical answer. Using
+      // null used to mean "nobody's drag ever moves this line," which
+      // is exactly the bug: the couple relocates, the line doesn't.
+      const childId = person.id;
       edges.push({childX, childGen:gen, childId, parents:connected, adjacent:false, uncertain});
     }
 
@@ -760,7 +765,10 @@ function placeDescendant(placed, edges, id, xLeft, width, gen, ownScale, nextSca
         const partnerXs = partnersOf(kp).map(sp=>{ const n = placed.find(pn=>pn.id===sp.id && pn.gen===kpos.gen); return n ? n.x : null; }).filter(v=>v!=null);
         if(partnerXs.length) childX = [kpos.x, ...partnerXs].reduce((a,b)=>a+b,0)/(partnerXs.length+1);
       }
-      const childId = uncertain ? null : k.id;
+      // See the ancestor-direction note above - a real id always, so the
+      // line actually follows wherever this couple's shared offset puts
+      // them, uncertain or not.
+      const childId = k.id;
       edges.push({childX, childGen:kpos.gen, childId, parents:parentPts, adjacent, uncertain});
       cx += widths[i];
     });
@@ -937,7 +945,8 @@ function placeKidsBelow(placed, edges, parentId, parentX, parentGen, spouseXMap,
       const partnerXs = partnersOf(kp).map(sp=>{ const n = placed.find(pn=>pn.id===sp.id && pn.gen===kpos.gen); return n ? n.x : null; }).filter(v=>v!=null);
       if(partnerXs.length) childX = [kpos.x, ...partnerXs].reduce((a,b)=>a+b,0)/(partnerXs.length+1);
     }
-    const childId = uncertain ? null : k.id;
+    // See the ancestor-direction note above - a real id always.
+    const childId = k.id;
     edges.push({childX, childGen:kpos.gen, childId, parents:parentPts, adjacent, uncertain});
     cx += widths[i];
   });

@@ -481,6 +481,22 @@ const adjacentX = (ax, bx, expectedStep) => Math.abs(Math.abs(ax-bx)-expectedSte
 const genderRank = p => !p ? 1 : p.gender==="m" ? 0 : p.gender==="f" ? 2 : 1;
 const sortIdsByGender = ids => [...ids].sort((a,b)=>genderRank(P(a))-genderRank(P(b)));
 const sortCoupleByGender = people => [...people].sort((a,b)=>genderRank(a)-genderRank(b));
+// Two or more partners sorted purely by gender can easily push the actual
+// blood pivot to one end of the row instead of between them, reading as
+// if a spouse were the center of the family rather than the person
+// who's actually related by blood. With more than one partner, the pivot
+// always sits in the middle - current partner(s) toward one side, anyone
+// divorced from the pivot toward the other - so a remarriage reads
+// left-to-right as "ex - them - current" instead of an arbitrary
+// gender-based shuffle. A single partner has no "middle" to protect, so
+// that case is unchanged.
+function unitOrder(pivotId, partnerIds){
+  if(partnerIds.length < 2) return sortIdsByGender([pivotId, ...partnerIds]);
+  const pivot = P(pivotId);
+  const exes = partnerIds.filter(pid => isDivorced(pivot, P(pid)));
+  const current = partnerIds.filter(pid => !isDivorced(pivot, P(pid)));
+  return [...sortIdsByGender(current), pivotId, ...sortIdsByGender(exes)];
+}
 // Both parents always expand, every generation, all the way back as far
 // as anyone's actually entered - there's no anchor/stop point any more to
 // pick a side at.
@@ -630,7 +646,7 @@ function placeAncestor(placed, edges, id, excludeSpouseId, xLeft, width, gen, ex
     const person = f.person;
     const partners = partnersOf(person).filter(s=>!(f.isPivot && s.id===excludeSpouseId));
     const extra = (f.isPivot && extraPartnerId) ? P(extraPartnerId) : null;
-    const unitIds = sortIdsByGender([person.id, ...partners.map(s=>s.id), ...(extra?[extra.id]:[])]);
+    const unitIds = unitOrder(person.id, [...partners.map(s=>s.id), ...(extra?[extra.id]:[])]);
     // A sibling with their own crowded cousin-fan below needs that much
     // room reserved HERE too, in the row itself, or the fan spills into
     // whoever's slotted in next to them - same width ancWidth already
@@ -716,7 +732,7 @@ function placeDescendant(placed, edges, id, xLeft, width, gen, ownScale, nextSca
   // with the next sibling's own space when there's no extra room needed.
   const unitWidth = step*(1 + partners.length);
   const unitLeft = xLeft + (width-unitWidth)/2;
-  const unitIds = sortIdsByGender([p.id, ...partners.map(s=>s.id)]);
+  const unitIds = unitOrder(p.id, partners.map(s=>s.id));
   const posOf = {};
   unitIds.forEach((uid,i) => { posOf[uid] = unitLeft + step*i + step/2; });
   const x = posOf[p.id];

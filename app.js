@@ -1070,21 +1070,41 @@ function renderPedigree(){
   // induction - no threshold to tune, no pass count to guess at, and a
   // manual drag landing anywhere near another row is caught exactly the
   // same as a same-generation neighbor.
+  // Couples (or a remarriage's trio) nudge as one rigid block, never
+  // individually - otherwise a collision that only really concerns one
+  // of them (some unrelated box elsewhere at the same height) shoves
+  // that one person away while their own partner(s) stay put, which
+  // reads exactly like someone dragged them apart by hand.
   const nodeNudgeX = new Map();
-  const sortedByX = [...placed].sort((a,b)=> pxRaw(a.id,a.x) - pxRaw(b.id,b.x));
+  const unitClaimed = new Set();
+  const units = placed.map(n=>{
+    if(unitClaimed.has(n.id)) return null;
+    const mates = partnerGroupOf(n.id).filter(sp => placed.some(pn=>pn.id===sp.id && pn.gen===n.gen));
+    const members = [n, ...mates.map(sp=>placed.find(pn=>pn.id===sp.id && pn.gen===n.gen))].filter(Boolean);
+    members.forEach(m=>unitClaimed.add(m.id));
+    return members;
+  }).filter(Boolean);
+  const sortedUnits = units.sort((a,b)=>
+    Math.min(...a.map(m=>pxRaw(m.id,m.x))) - Math.min(...b.map(m=>pxRaw(m.id,m.x))));
   const placedSoFar = [];
-  sortedByX.forEach(n=>{
-    const half = halfWidthOf(n.id), halfH = estHalfHeight(n.id), y = pyAdj(n.id, n.gen);
-    let x = pxRaw(n.id, n.x);
-    placedSoFar.forEach(o=>{
-      if(Math.abs(y-o.y) < halfH+o.halfH){
-        const minX = o.x + o.half + MIN_GAP + half;
-        if(x < minX) x = minX;
-      }
+  sortedUnits.forEach(unit=>{
+    const spans = unit.map(m=>({
+      id:m.id, half:halfWidthOf(m.id), halfH:estHalfHeight(m.id),
+      y:pyAdj(m.id, m.gen), x:pxRaw(m.id, m.x)
+    }));
+    let shift = 0;
+    spans.forEach(s=>{
+      placedSoFar.forEach(o=>{
+        if(Math.abs(s.y-o.y) < s.halfH+o.halfH){
+          const needed = o.x + o.half + MIN_GAP + s.half - s.x;
+          if(needed > shift) shift = needed;
+        }
+      });
     });
-    const nudge = x - pxRaw(n.id, n.x);
-    if(nudge>0.01) nodeNudgeX.set(n.id, nudge);
-    placedSoFar.push({x, half, y, halfH});
+    spans.forEach(s=>{
+      if(shift>0.01) nodeNudgeX.set(s.id, shift);
+      placedSoFar.push({x:s.x+shift, half:s.half, y:s.y, halfH:s.halfH});
+    });
   });
   const pxAdj = (id, x) => pxRaw(id, x) + (nodeNudgeX.get(id)||0);
   const width = (maxX-minX)*SLOT_W + PAD_X*2;

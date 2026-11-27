@@ -1371,6 +1371,16 @@ async function placeChild(id){
   // Still an ordinary placed box afterward, draggable like any other.
   const ok = await put({...p, layoutDx:0, layoutDy:0});
   if(!ok) return; // put() already toasted why it didn't save
+  // A parent left collapsed (very likely right after a declutter, or
+  // just never re-opened) hides ALL their kids outright, regardless of
+  // placed status - visibleChildren checks that first and stops right
+  // there. The couple panel's own "not yet placed" list never touches
+  // that flag, so placing a kid here needs to clear it on whichever
+  // parent(s) still have it set, or the write succeeds but the board
+  // keeps looking exactly as if nothing happened.
+  const collapsedParents = (p.parents||[]).map(P).filter(parent => parent && parent.collapsed);
+  const toUncollapse = uniq(collapsedParents.flatMap(parent => [parent.id, ...partnerGroupOf(parent.id).map(sp=>sp.id)]));
+  await Promise.all(toUncollapse.map(pid => { const person = P(pid); return person ? put({...person, collapsed:false}) : null; }));
   render();
   // Scrolled into view, not just toasted about - on a big tree a brand
   // new box can easily land somewhere off the current scroll position,
